@@ -1,0 +1,105 @@
+{
+  "protocol_id": "BAS-EXP-FLUID-2026",
+  "experiment_name": "Capillary Fluidic Injection & Valve Mating",
+  "category": "FLUID_PHYSICS_WETLAB",
+  "facility": "Bharatiya Antariksh Station (BAS) - Glovebox Fluid Physics Bench",
+  "camera_tag": "CAM-02 • FLUID BENCH PORT-A",
+  "camera_channel": "CAM-FPB-02-B",
+  "camera_location": "Fluid Physics Bench Workstation",
+  "max_allowed_step_time_sec": 35.0,
+  "steps": [
+    {
+      "step_id": 1,
+      "expected_action": "PICK",
+      "expected_target": "Syringe_Injector",
+      "description": "Pick up 5mL Zero-G positive displacement fluid syringe (Left or Right Hand)",
+      "criticality": "HIGH",
+      "timeout_seconds": 30.0
+    },
+    {
+      "step_id": 2,
+      "expected_action": "INJECT",
+      "expected_target": "Sample_Vial",
+      "description": "Depress plunger and aspirate 2.5 mL reagent through Sample Vial septum",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 25.0
+    },
+    {
+      "step_id": 3,
+      "expected_action": "MATE",
+      "expected_target": "Manifold_Port_A",
+      "description": "Dock syringe luer-lock into Capillary Manifold Port A until secure",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 25.0
+    },
+    {
+      "step_id": 4,
+      "expected_action": "CLAMP",
+      "expected_target": "Pinch_Valve",
+      "description": "Engage retention clamp on fluid line to secure against zero-G bubbles",
+      "criticality": "HIGH",
+      "timeout_seconds": 15.0
+    }
+  ],
+  "payload_targets": [
+    {
+      "object_id": "obj_syringe",
+      "class_name": "Syringe_Injector",
+      "common_name": "Positive Displacement Fluid Syringe",
+      "centroid": [0.22, 0.35],
+      "bbox": [140, 160, 220, 240],
+      "specs": {
+        "payload_id": "PL-SYR-FLUID-02",
+        "microg_mass": "95 g",
+        "dimensions": "25mm dia x 140mm",
+        "contents": "Capillary Test Buffer Solution",
+        "hazard_level": "Non-Hazardous (Biocompatible)",
+        "destination_bay": "Manifold_Port_A",
+        "alignment_pin": "Luer-Lock Quick-Disconnect",
+        "handling": "Ambidextrous pick. Maintain gentle plunger force to avoid cavitation."
+      }
+    },
+    {
+      "object_id": "obj_vial",
+      "class_name": "Sample_Vial",
+      "common_name": "Reagent Septum Vial #04",
+      "centroid": [0.45, 0.35],
+      "bbox": [280, 160, 360, 240],
+      "specs": {
+        "payload_id": "PL-VIAL-BUF-01",
+        "microg_mass": "60 g",
+        "dimensions": "30mm dia x 75mm",
+        "contents": "Biological Buffer Reagent",
+        "hazard_level": "Biosafety Level 1 (Sealed Septum)",
+        "destination_bay": "Incubation Tray B",
+        "alignment_pin": "Self-Sealing Silicone Septum",
+        "handling": "Hold securely at base while inserting syringe needle."
+      }
+    },
+    {
+      "object_id": "obj_manifold",
+      "class_name": "Manifold_Port_A",
+      "common_name": "Capillary Manifold Port A",
+      "centroid": [0.75, 0.65],
+      "bbox": [480, 310, 560, 390],
+      "specs": {
+        "port_id": "PORT-CAP-01-A",
+        "operating_pressure": "1.2 bar",
+        "bus_interface": "Microgravity Fluid Bus",
+        "seal_status": "HERMETIC READY"
+      }
+    },
+    {
+      "object_id": "obj_pinch",
+      "class_name": "Pinch_Valve",
+      "common_name": "Fluid Line Retention Clamp",
+      "centroid": [0.75, 0.85],
+      "bbox": [480, 410, 560, 490],
+      "specs": {
+        "clamp_type": "Positive Spring Pinch Clamp",
+        "clamping_force": "12.0 N",
+        "indicator": "Mechanical Flag Blue"
+      }
+    }
+  ]
+}

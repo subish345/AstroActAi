@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large Telemetry recordings and logs (>4GB total, individual files exceed GitHub 100MB limit)
+telemetry/*.jsonl
+telemetry/sessions/*
+!telemetry/.gitkeep
+!telemetry/sessions/.gitkeep
+
+# Temporary and duplicate files
+mdcp
+mdcp.txt
+*.tmp
+*.log
+
+# Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstroActAi — 3D Microgravity Space Operations & Mission Control</title>
+  <meta name="description" content="AI-powered 3D astronaut activity monitoring, microgravity 33-point pose estimation, and protocol compliance verification system.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <!-- TOP TELEMETRY BANNER -->
+  <header class="header">
+    <div class="brand-cluster">
+      <div class="orbit-badge">
+        <span class="orbit-dot"></span>
+        <span class="orbit-ring"></span>
+      </div>
+      <div>
+        <h1 class="brand-title">ASTROACT-AI <span class="badge-sub">3D SPACE PAYLOAD OPS</span></h1>
+        <p class="brand-sub">Bharatiya Antariksh Station (BAS) • Microgravity 3D Kinematics Copilot</p>
+      </div>
+    </div>
+
+    <div class="telemetry-stat-pills">
+      <div class="stat-pill">
+        <span class="stat-label">FACILITY</span>
+        <span class="stat-val" id="facility-id">BAS-MSG-01</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">CAM CHANNEL</span>
+        <span class="stat-val rec-pulse" id="cam-channel-badge">CAM-MSG-01-A</span>
+      </div>
+      <div class="stat-pill">
+        <span class="stat-label">MISSION UTC</span>
+        <span class="stat-val font-mono" id="mission-clock">00:00:00 UTC</span>
+      </div>
+      <div class="stat-pill highlight">
+        <span class="stat-label">COMPLIANCE</span>
+        <span class="stat-val" id="compliance-pct">100%</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ALERT BANNER -->
+  <div class="incident-banner hidden" id="incident-banner">
+    <div class="alert-icon-pulse">⚠️</div>
+    <div class="alert-content">
+      <div class="alert-header">
+        <span class="alert-tag" id="alert-type">PROTOCOL DEVIATION</span>
+        <span class="alert-step" id="alert-step-id">STEP 0</span>
+      </div>
+      <div class="alert-msg" id="alert-message">Waiting for telemetry stream...</div>
+    </div>
+    <button class="alert-ack-btn" id="alert-ack-btn">ACKNOWLEDGE</button>
+  </div>
+
+  <!-- MAIN TELEMETRY GRID -->
+  <main class="main-grid">
+    <!-- LEFT PANEL: 3D SPACE STATION VISUALIZER & LIVE CAMERA FEED -->
+    <section class="card panel-skeleton">
+      <div class="card-header">
+        <div class="card-title-group">
+          <span class="card-tag">PERCEPTION BRANCH 1 & 2 • 3D WEBGL ENGINE</span>
+          <h2>ASTRONAUT 3D POSE IN MICROGRAVITY</h2>
+        </div>
+        <div class="stream-indicators">
+          <span class="tag-live" id="camera-tag-stream-badge">● CAM-01 • GLOVEBOX BIO-RACK</span>
+          <span class="tag-coords">33 3D JOINTS</span>
+        </div>
+      </div>
+
+      <!-- 3D SPACE VIEWPORT (THREE.JS) -->
+      <div class="canvas-wrapper" id="canvas-3d-wrapper">
+        <div id="three-container"></div>
+
+        <!-- 3D CAMERA CONTROLS TOOLBAR -->
+        <div class="view-controls-toolbar">
+          <button class="view-btn active" onclick="setCameraView('orbit')">3D Orbit</button>
+          <button class="view-btn" onclick="setCameraView('front')">Front</button>
+          <button class="view-btn" onclick="setCameraView('top')">Rack / Top</button>
+          <button class="view-btn" onclick="setCameraView('side')">Side Depth</button>
+          <button class="view-btn" onclick="reset3DCamera()">↺ Reset</button>
+        </div>
+
+        <!-- LIVE WEBCAM PIP WINDOW -->
+        <div class="pip-camera-box" id="pip-camera-box">
+          <div class="pip-header">
+            <span id="pip-camera-title">● CAM-01 • GLOVEBOX BIO-RACK</span>
+            <div style="display: flex; align-items: center; gap: 0.45rem;">
+              <button class="pip-popout-btn" onclick="openStandaloneCamera()" title="Open enlarged standalone camera window">⤢ POP OUT</button>
+              <span class="pip-rec-badge" id="pip-rec-badge">RECORDING</span>
+            </div>
+          </div>
+          <img id="live-camera-feed" src="/api/v1/stream/video" alt="Astronaut Edge Camera" onerror="this.style.display='none'; document.getElementById('camera-offline-msg').style.display='flex';" onload="this.style.display='block'; document.getElementById('camera-offline-msg').style.display='none';">
+          <div class="camera-offline-box" id="camera-offline-msg">
+            <span>📹 Live Camera Standby</span>
+            <small>Run: <code>python3 astronaut_monitor.py --camera 0</code></small>
+          </div>
+        </div>
+
+        <!-- 3D OVERLAY READOUT -->
+        <div class="canvas-overlay-stats">
+          <div class="overlay-row">
+            <span>OPERATOR ROLL:</span>
+            <strong class="font-mono text-cyan" id="overlay-roll">0.0°</strong>
+          </div>
+          <div class="overlay-row">
+            <span>WRIST VELOCITY:</span>
+            <strong class="font-mono text-cyan" id="overlay-vel">0.00 m/s</strong>
+          </div>
+          <div class="overlay-row">
+            <span>DOMINANT WRIST 3D:</span>
+            <strong class="font-mono text-amber" id="overlay-wrist-3d">[0.0, 0.0, 0.0]</strong>
+          </div>
+          <div class="overlay-row">
+            <span>LOWER BODY / LEGS:</span>
+            <strong class="font-mono text-green" id="overlay-lower-body">ANCHORED IN RESTRAINT</strong>
+          </div>
+          <div class="overlay-row">
+            <span>RACK NORMALIZATION:</span>
+            <strong class="font-mono text-green">6-DoF ACTIVE</strong>
+          </div>
+        </div>
+      </div>
+
+      <!-- KINEMATICS TELEMETRY GAUGES -->
+      <div class="gauge-grid">
+        <div class="gauge-item">
+          <div class="gauge-header">
+            <span>BODY ROLL TILT (3D GYRO)</span>
+            <span id="val-roll" class="font-mono">0.0°</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="bar-roll" style="width: 50%;"></div>
+          </div>
+        </div>
+
+        <div class="gauge-item">
+          <div class="gauge-header">
+            <span>WRIST DYNAMICS (3D VECTOR)</span>
+            <span id="val-vel" class="font-mono">0.00 m/s</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="bar-vel" style="width: 10%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- REAL-TIME KINEMATICS & MOTION GRAPH (SYNCED TO CAMERA FPS) -->
+      <div class="motion-graph-card">
+        <div class="motion-graph-header">
+          <div class="motion-title">
+            <span class="pulse-dot"></span>
+            <span>REAL-TIME DYNAMICS WAVEFORM (CAMERA FPS SYNC)</span>
+          </div>
+          <div class="motion-legends font-mono">
+            <span class="legend-item" style="color: #00e5ff;">● WRIST SPEED</span>
+            <span class="legend-item" style="color: #ff9100;">● BODY ROLL</span>
+            <span class="legend-item" style="color: #00e676;">● LEG MOTION</span>
+          </div>
+        </div>
+        <canvas id="kinematics-waveform-canvas" width="640" height="70"></canvas>
+      </div>
+
+      <!-- DUAL-HAND INTERACTION TELEMETRY DECK -->
+      <div class="dual-hand-deck">
+        <div class="hand-card left-hand-card" id="left-hand-card">
+          <div class="hand-header">
+            <span class="hand-badge badge-l">LEFT HAND</span>
+            <span class="hand-grip-tag" id="left-grip-tag">EMPTY</span>
+          </div>
+          <div class="hand-obj-name" id="left-hand-obj">NO OBJECT DETECTED</div>
+          <div class="hand-metrics font-mono">
+            <span id="left-hand-vel">0.00 m/s</span> | <span id="left-hand-coords">[-0.20, 0.00, 0.00]</span>
+          </div>
+        </div>
+
+        <div class="hand-card right-hand-card" id="right-hand-card">
+          <div class="hand-header">
+            <span class="hand-badge badge-r">RIGHT HAND</span>
+            <span class="hand-grip-tag" id="right-grip-tag">EMPTY</span>
+          </div>
+          <div class="hand-obj-name" id="right-hand-obj">NO OBJECT DETECTED</div>
+          <div class="hand-metrics font-mono">
+            <span id="right-hand-vel">0.00 m/s</span> | <span id="right-hand-coords">[0.20, 0.00, 0.00]</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- LOWER BODY & LEG TELEMETRY DECK -->
+      <div class="leg-deck">
+        <div class="leg-card left-leg-card" id="left-leg-card">
+          <div class="leg-header">
+            <span class="leg-badge badge-l">LEFT LEG</span>
+            <span class="leg-tag" id="left-leg-tag">ANCHORED</span>
+          </div>
+          <div class="leg-act-name" id="left-leg-act">RESTRAINT NOMINAL</div>
+          <div class="leg-metrics font-mono">
+            <span>KNEE: <strong id="left-knee-angle">178°</strong></span> | <span>VEL: <strong id="left-leg-vel">0.00 m/s</strong></span>
+          </div>
+        </div>
+
+        <div class="leg-card right-leg-card" id="right-leg-card">
+          <div class="leg-header">
+            <span class="leg-badge badge-r">RIGHT LEG</span>
+            <span class="leg-tag" id="right-leg-tag">ANCHORED</span>
+          </div>
+          <div class="leg-act-name" id="right-leg-act">RESTRAINT NOMINAL</div>
+          <div class="leg-metrics font-mono">
+            <span>KNEE: <strong id="right-knee-angle">176°</strong></span> | <span>VEL: <strong id="right-leg-vel">0.00 m/s</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- IN-HAND ACTIVE PAYLOAD TELEMETRY CARD -->
+      <div class="inhand-payload-card hidden" id="inhand-payload-card">
+        <div class="inhand-header">
+          <div class="inhand-title-group">
+            <span class="inhand-tag">DETECTED IN-HAND PAYLOAD</span>
+            <h3 class="inhand-obj-name" id="inhand-obj-name">Component_A (Biospecimen Canister)</h3>
+          </div>
+          <span class="inhand-hand-badge" id="inhand-actor-badge">RIGHT HAND</span>
+        </div>
+        <div class="inhand-specs-grid" id="inhand-specs-grid">
+          <!-- Injected dynamically via JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- MIDDLE PANEL: DETERMINISTIC FSM COMPLIANCE ENGINE -->
+    <section class="card panel-protocol">
+      <div class="card-header">
+        <div class="card-title-group">
+          <span class="card-tag">STAGE 3 FSM ENGINE</span>
+          <h2>EXPERIMENT PROTOCOL VERIFICATION</h2>
+        </div>
+        <span class="protocol-id-badge" id="protocol-id-badge">EXP-BAS-001</span>
+      </div>
+
+      <div class="experiment-info-box">
+        <div class="scenario-selector-bar">
+          <label for="scenario-select" class="scenario-label">ACTIVE MISSION SCENARIO:</label>
+          <select id="scenario-select" class="scenario-dropdown" onchange="switchProtocol(this.value)">
+            <option value="BAS-EXP-BIO-2026">🔬 Scenario 1: Biological Specimen Insertion & Rack Seal</option>
+            <option value="BAS-EXP-FLUID-2026">💧 Scenario 2: Capillary Fluidic Injection & Valve Mating</option>
+            <option value="BAS-EXP-AVIONICS-2026">⚡ Scenario 3: SpaceWire Bus Harness Routing & Torque</option>
+            <option value="BAS-EMERGENCY-01">🚨 Scenario 4: Airlock Depress & Emergency Hatch Seal</option>
+          </select>
+        </div>
+        <div class="info-label" style="margin-top: 0.6rem;">EXPERIMENT DETAILS:</div>
+        <div class="info-title" id="experiment-name">Biological Specimen Insertion & Rack Seal</div>
+        <div class="info-desc" id="experiment-facility">Bharatiya Antariksh Station (BAS) - Microgravity Science Glovebox</div>
+      </div>
+
+      <!-- PROTOCOL STEPS TIMELINE -->
+      <div class="steps-container" id="steps-container">
+        <!-- Dynamically injected via JS -->
+      </div>
+
+      <!-- DETECTED VS EXPECTED ACTION COMPARISON -->
+      <div class="comparison-card">
+        <div class="comp-col">
+          <div class="comp-label">CURRENT EXPECTED</div>
+          <div class="comp-val font-mono text-green" id="expected-action-display">PICK Component_A</div>
+        </div>
+        <div class="comp-divider">⇄</div>
+        <div class="comp-col">
+          <div class="comp-label">AI DETECTED ACTION</div>
+          <div class="comp-val font-mono text-cyan" id="detected-action-display">STANDBY</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT PANEL: INCIDENT DISPATCH & FLIGHT LOG STREAM -->
+    <section class="card panel-telemetry">
+      <div class="card-header">
+        <div class="card-title-group">
+          <span class="card-tag">TELEMETRY UPLINK & AUDIT</span>
+          <h2>FLIGHT LOG & SESSIONS</h2>
+        </div>
+        <div class="log-counters">
+          <span class="counter-pill" id="counter-deviations">0 DEVIATIONS</span>
+        </div>
+      </div>
+
+      <!-- AUDIT LOG TERMINAL -->
+      <div class="terminal-container" id="terminal-logs">
+        <div class="log-entry sys-entry">[SYSTEM] Bharatiya Antariksh Station 3D POIC Online.</div>
+        <div class="log-entry sys-entry">[SYSTEM] 3D WebGL Space Renderer Initialized. Awaiting astronaut feed.</div>
+      </div>
+
+      <!-- RECORDED FLIGHT SESSIONS LIST -->
+      <div class="recordings-drawer">
+        <div class="recordings-header">
+          <span>📹 RECORDED ASTRONAUT SESSIONS</span>
+          <button class="btn-refresh-recs" onclick="loadRecordingsList()">↻ Refresh</button>
+        </div>
+        <div class="recordings-list" id="recordings-list">
+          <div class="rec-placeholder">No saved sessions yet. Run camera with recording enabled.</div>
+        </div>
+      </div>
+
+      <!-- SIMULATION CONTROLS DECK -->
+      <div class="sim-deck">
+        <div class="sim-deck-title">SCENARIO FAULT INJECTION & TESTBED</div>
+        <div class="sim-btn-grid">
+          <button class="sim-btn btn-success" onclick="runScenario('correct')">
+            <span class="btn-num">1</span>
+            <div class="btn-text">
+              <strong>100% Compliant</strong>
+              <small>Pick → Rotate → Insert → Lock</small>
+            </div>
+          </button>
+
+          <button class="sim-btn btn-warning" onclick="runScenario('skipped')">
+            <span class="btn-num">2</span>
+            <div class="btn-text">
+              <strong>Skipped Step</strong>
+              <small>Pick → Insert (Skip Rotate)</small>
+            </div>
+          </button>
+
+          <button class="sim-btn btn-warning" onclick="runScenario('order')">
+            <span class="btn-num">3</span>
+            <div class="btn-text">
+              <strong>Wrong Order</strong>
+              <small>Pick → Insert → Rotate</small>
+            </div>
+          </button>
+
+          <button class="sim-btn btn-danger" onclick="runScenario('wrong_object')">
+            <span class="btn-num">4</span>
+            <div class="btn-text">
+              <strong>Wrong Object</strong>
+              <small>Pick Component B</small>
+            </div>
+          </button>
+        </div>
+
+        <div class="sim-deck-footer">
+          <button class="btn-reset" onclick="resetTelemetryState()">↺ Reset Mission State</button>
+          <span class="sim-status-label" id="sim-status-label">Standby</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- THREE.JS 3D ENGINE & CONTROLS -->
+  <script src="/static/vendor/three.min.js"></script>
+  <script src="/static/vendor/OrbitControls.js"></script>
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstroActAi — Dedicated Enlarged Astronaut Optical Camera HUD</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css">
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: #05080f;
+      color: #e2e8f0;
+      font-family: 'Outfit', sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    .camera-standalone-header {
+      background: rgba(10, 15, 26, 0.95);
+      border-bottom: 1px solid rgba(0, 229, 255, 0.25);
+      padding: 0.65rem 1.25rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(10px);
+      z-index: 20;
+    }
+
+    .brand-standalone {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .rec-indicator-pulse {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      background: rgba(255, 23, 68, 0.15);
+      border: 1px solid rgba(255, 23, 68, 0.4);
+      color: #ff1744;
+      font-size: 0.65rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 0.25rem 0.6rem;
+      border-radius: 4px;
+      letter-spacing: 0.08em;
+    }
+
+    .rec-indicator-pulse .dot {
+      width: 8px;
+      height: 8px;
+      background: #ff1744;
+      border-radius: 50%;
+      animation: pulse 1.2s infinite ease-in-out;
+    }
+
+    .camera-viewport-container {
+      flex: 1;
+      position: relative;
+      background: #000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #standalone-camera-img {
+      max-width: 100%;
+      max-height: 100%;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      transition: transform 0.2s ease, filter 0.2s ease;
+    }
+
+    /* HUD Reticle Overlay */
+    .hud-reticle-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      box-sizing: border-box;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .hud-corner {
+      position: absolute;
+      width: 32px;
+      height: 32px;
+      border-color: rgba(0, 229, 255, 0.6);
+      border-style: solid;
+      pointer-events: none;
+    }
+    .hud-corner.tl { top: 20px; left: 20px; border-width: 2px 0 0 2px; }
+    .hud-corner.tr { top: 20px; right: 20px; border-width: 2px 2px 0 0; }
+    .hud-corner.bl { bottom: 20px; left: 20px; border-width: 0 0 2px 2px; }
+    .hud-corner.br { bottom: 20px; right: 20px; border-width: 0 2px 2px 0; }
+
+    .hud-center-crosshair {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 60px;
+      height: 60px;
+      pointer-events: none;
+      opacity: 0.45;
+    }
+    .hud-center-crosshair::before,
+    .hud-center-crosshair::after {
+      content: '';
+      position: absolute;
+      background: #00e5ff;
+    }
+    .hud-center-crosshair::before {
+      top: 50%;
+      left: 0;
+      right: 0;
+      height: 1px;
+      transform: translateY(-50%);
+    }
+    .hud-center-crosshair::after {
+      left: 50%;
+      top: 0;
+      bottom: 0;
+      width: 1px;
+      transform: translateX(-50%);
+    }
+
+    .hud-top-telemetry {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .hud-telemetry-badge {
+      background: rgba(8, 12, 22, 0.82);
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      backdrop-filter: blur(6px);
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.72rem;
+      color: #00e5ff;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .hud-bottom-telemetry {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+
+    .hud-action-pill {
+      background: rgba(8, 12, 22, 0.85);
+      border: 1px solid rgba(0, 230, 118, 0.4);
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      color: #00e676;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    /* Floating Toolbar */
+    .hud-floating-toolbar {
+      position: absolute;
+      top: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(8, 12, 22, 0.88);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      backdrop-filter: blur(8px);
+      border-radius: 8px;
+      padding: 0.3rem 0.6rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      z-index: 15;
+      pointer-events: auto;
+    }
+
+    .toolbar-btn {
+      background: rgba(0, 229, 255, 0.1);
+      border: 1px solid rgba(0, 229, 255, 0.25);
+      color: #e2e8f0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.68rem;
+      font-weight: 600;
+      padding: 0.3rem 0.65rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .toolbar-btn:hover {
+      background: rgba(0, 229, 255, 0.25);
+      color: #00e5ff;
+      border-color: #00e5ff;
+    }
+
+    .toolbar-btn.active {
+      background: #00e5ff;
+      color: #05080f;
+      font-weight: 700;
+    }
+
+    .camera-bottom-deck {
+      background: rgba(10, 15, 26, 0.95);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0.75rem 1.25rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      z-index: 20;
+    }
+
+    .deck-metric {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      padding: 0.45rem 0.75rem;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .deck-metric-label {
+      font-size: 0.58rem;
+      color: #94a3b8;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+    }
+
+    .deck-metric-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <!-- HEADER -->
+  <header class="camera-standalone-header">
+    <div class="brand-standalone">
+      <div class="orbit-badge">
+        <span class="orbit-dot"></span>
+        <span class="orbit-ring"></span>
+      </div>
+      <div>
+        <h1 style="font-size: 0.95rem; font-weight: 800; margin: 0; letter-spacing: 0.05em; color: #fff;">
+          ASTROACT-AI <span style="color: #00e5ff; font-weight: 600;">• ENLARGED OPTICAL HUD</span>
+        </h1>
+        <div style="font-size: 0.62rem; color: #94a3b8;" id="camera-subtitle">
+          CAM-01 • GLOVEBOX BIO-RACK | Microgravity Science Glovebox Bay
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 0.85rem;">
+      <div class="rec-indicator-pulse">
+        <span class="dot"></span>
+        <span>REC 1080P/30FPS</span>
+      </div>
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: #38bdf8;" id="standalone-clock">
+        00:00:00 UTC
+      </div>
+      <button class="toolbar-btn" onclick="window.close()" title="Close separate window">✕ Close</button>
+    </div>
+  </header>
+
+  <!-- CAMERA VIEWPORT CONTAINER -->
+  <main class="camera-viewport-container" id="camera-viewport">
+    <!-- Camera Image Feed -->
+    <img id="standalone-camera-img" src="/api/v1/stream/video" alt="Astronaut High-Definition Stream"
+         onerror="handleCameraError()" onload="handleCameraLoad()">
+
+    <!-- Floating Quick Toolbar -->
+    <div class="hud-floating-toolbar">
+      <button class="toolbar-btn active" id="btn-zoom-1" onclick="setZoom(1.0)">1.0x</button>
+      <button class="toolbar-btn" id="btn-zoom-125" onclick="setZoom(1.25)">1.25x</button>
+      <button class="toolbar-btn" id="btn-zoom-15" onclick="setZoom(1.5)">1.5x</button>
+      <button class="toolbar-btn" id="btn-zoom-2" onclick="setZoom(2.0)">2.0x</button>
+      <span style="color: rgba(255,255,255,0.2);">|</span>
+      <button class="toolbar-btn" onclick="toggleMirror()" id="btn-mirror">⇄ Mirror</button>
+      <button class="toolbar-btn" onclick="toggleReticle()" id="btn-reticle">🎯 Reticle</button>
+      <button class="toolbar-btn" onclick="captureSnapshot()">📷 Snap</button>
+      <button class="toolbar-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+    </div>
+
+    <!-- HUD Reticle Elements -->
+    <div class="hud-reticle-overlay" id="hud-overlay">
+      <div class="hud-corner tl"></div>
+      <div class="hud-corner tr"></div>
+      <div class="hud-corner bl"></div>
+      <div class="hud-corner br"></div>
+      <div class="hud-center-crosshair"></div>
+
+      <div class="hud-top-telemetry">
+        <div class="hud-telemetry-badge">
+          <span>OPERATOR ROLL: <strong id="hud-roll" style="color:#38bdf8;">0.0°</strong></span>
+          <span>WRIST VELOCITY: <strong id="hud-vel" style="color:#38bdf8;">0.00 m/s</strong></span>
+        </div>
+        <div class="hud-telemetry-badge" style="text-align: right;">
+          <span>PROTOCOL: <strong id="hud-protocol" style="color:#00e5ff;">BAS-EXP-BIO-2026</strong></span>
+          <span>CURRENT STEP: <strong id="hud-step" style="color:#00e676;">STEP 1 / 4</strong></span>
+        </div>
+      </div>
+
+      <div class="hud-bottom-telemetry">
+        <div class="hud-action-pill" id="hud-action-pill">
+          <span style="font-size: 0.9rem;">●</span>
+          <span id="hud-action-text">ACTIVE: STANDBY / CONTINUOUS MONITORING</span>
+        </div>
+        <div class="hud-telemetry-badge">
+          <span>HAND: <strong id="hud-active-hand" style="color:#ffb300;">DUAL-READY</strong></span>
+          <span>PAYLOAD: <strong id="hud-payload" style="color:#a855f7;">NONE</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Offline Message Placeholder -->
+    <div id="camera-standalone-offline" style="display: none; position: absolute; inset: 0; background: #070b14; flex-direction: column; align-items: center; justify-content: center; gap: 1rem; color: #94a3b8; z-index: 10;">
+      <div style="font-size: 2rem;">📹</div>
+      <div style="font-size: 1rem; font-weight: 700; color: #e2e8f0;">Live Optical Stream Offline</div>
+      <div style="font-size: 0.8rem;">Start edge monitor: <code style="color: #00e5ff;">python3 astronaut_monitor.py --camera 0</code></div>
+      <button class="toolbar-btn" onclick="retryStream()" style="margin-top: 0.5rem;">↻ Reconnect Stream</button>
+    </div>
+  </main>
+
+  <!-- BOTTOM TELEMETRY STRIP -->
+  <footer class="camera-bottom-deck">
+    <div class="deck-metric">
+      <span class="deck-metric-label">LEFT HAND STATE</span>
+      <span class="deck-metric-val" id="deck-left-hand">READY (0.00 m/s)</span>
+    </div>
+    <div class="deck-metric">
+      <span class="deck-metric-label">RIGHT HAND STATE</span>
+      <span class="deck-metric-val" id="deck-right-hand">READY (0.00 m/s)</span>
+    </div>
+    <div class="deck-metric">
+      <span class="deck-metric-label">LOWER BODY ERGONOMICS</span>
+      <span class="deck-metric-val" id="deck-lower-body" style="color: #00e676;">ANCHORED IN FOOT RESTRAINT</span>
+    </div>
+    <div class="deck-metric">
+      <span class="deck-metric-label">PROTOCOL COMPLIANCE</span>
+      <span class="deck-metric-val" id="deck-compliance" style="color: #00e676;">100% NOMINAL</span>
+    </div>
+  </footer>
+
+  <script>
+    let currentZoom = 1.0;
+    let isMirrored = false;
+    let showReticle = true;
+
+    // Clock
+    setInterval(() => {
+      const now = new Date();
+      document.getElementById('standalone-clock').textContent = now.toUTCString().split(' ')[4] + ' UTC';
+    }, 1000);
+
+    function setZoom(factor) {
+      currentZoom = factor;
+      document.querySelectorAll('[id^="btn-zoom-"]').forEach(b => b.classList.remove('active'));
+      const activeBtn = document.getElementById(`btn-zoom-${String(factor).replace('.', '')}`);
+      if (activeBtn) activeBtn.classList.add('active');
+      applyTransform();
+    }
+
+    function toggleMirror() {
+      isMirrored = !isMirrored;
+      document.getElementById('btn-mirror').classList.toggle('active', isMirrored);
+      applyTransform();
+    }
+
+    function applyTransform() {
+      const img = document.getElementById('standalone-camera-img');
+      const scaleX = isMirrored ? -currentZoom : currentZoom;
+      img.style.transform = `scale(${scaleX}, ${currentZoom})`;
+    }
+
+    function toggleReticle() {
+      showReticle = !showReticle;
+      document.getElementById('hud-overlay').style.display = showReticle ? 'flex' : 'none';
+      document.getElementById('btn-reticle').classList.toggle('active', showReticle);
+    }
+
+    function toggleFullscreen() {
+      const el = document.getElementById('camera-viewport');
+      if (!document.fullscreenElement) {
+        el.requestFullscreen().catch(err => console.error(err));
+      } else {
+        document.exitFullscreen();
+      }
+    }
+
+    function captureSnapshot() {
+      const img = document.getElementById('standalone-camera-img');
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || 1280;
+      canvas.height = img.naturalHeight || 720;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const link = document.createElement('a');
+      link.download = `astronaut_camera_snap_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }
+
+    function handleCameraError() {
+      document.getElementById('camera-standalone-offline').style.display = 'flex';
+      document.getElementById('standalone-camera-img').style.display = 'none';
+    }
+
+    function handleCameraLoad() {
+      document.getElementById('camera-standalone-offline').style.display = 'none';
+      document.getElementById('standalone-camera-img').style.display = 'block';
+    }
+
+    function retryStream() {
+      const img = document.getElementById('standalone-camera-img');
+      img.src = '/api/v1/stream/video?t=' + Date.now();
+    }
+
+    // Automatically close this camera window if parent program / dashboard is closed
+    setInterval(() => {
+      try {
+        if (window.opener && window.opener.closed) {
+          window.close();
+        }
+      } catch (e) {}
+    }, 500);
+
+    window.addEventListener("message", (ev) => {
+      if (ev.data === "CLOSE_CAMERA_WINDOW" || ev.data === "PROGRAM_CLOSED") {
+        window.close();
+      }
+    });
+
+    // Connect WebSocket for Live Telemetry Sync
+    let ws;
+    function connectWS() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${proto}//${window.location.host}/ws/telemetry`);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'CAMERA_OFFLINE') {
+            handleCameraError();
+            return;
+          }
+          const state = msg.state || (msg.type === 'HEARTBEAT' ? msg.data : null);
+          if (!state) return;
+
+          if (state.protocol_id) document.getElementById('hud-protocol').textContent = state.protocol_id;
+          if (state.current_step) document.getElementById('hud-step').textContent = `STEP ${state.current_step}`;
+          if (state.active_action) document.getElementById('hud-action-text').textContent = `ACTIVE: ${state.active_action}`;
+          if (state.active_hand) document.getElementById('hud-active-hand').textContent = state.active_hand;
+          if (state.held_payload) document.getElementById('hud-payload').textContent = state.held_payload;
+
+          if (state.astronaut_pose) {
+            const roll = state.astronaut_pose.body_roll_degrees;
+            if (roll !== null && roll !== undefined) {
+              document.getElementById('hud-roll').textContent = `${Number(roll).toFixed(1)}°`;
+            }
+            const vel = state.astronaut_pose.wrist_velocity;
+            if (vel !== null && vel !== undefined) {
+              document.getElementById('hud-vel').textContent = `${Number(vel).toFixed(2)} m/s`;
+            }
+          }
+
+          if (state.left_hand) {
+            const h = state.left_hand;
+            document.getElementById('deck-left-hand').textContent = h.held_object ? `HELD: ${h.held_object}` : (h.detected ? 'TRACKED (EMPTY)' : 'OUT OF FRAME');
+          }
+          if (state.right_hand) {
+            const h = state.right_hand;
+            document.getElementById('deck-right-hand').textContent = h.held_object ? `HELD: ${h.held_object}` : (h.detected ? 'TRACKED (EMPTY)' : 'OUT OF FRAME');
+          }
+          if (state.lower_body_activity) {
+            document.getElementById('deck-lower-body').textContent = state.lower_body_activity;
+          }
+          if (state.deviations_count !== undefined) {
+            const compEl = document.getElementById('deck-compliance');
+            if (state.deviations_count === 0) {
+              compEl.textContent = '100% NOMINAL';
+              compEl.style.color = '#00e676';
+            } else {
+              compEl.textContent = `${state.deviations_count} DEVIATION(S)`;
+              compEl.style.color = '#ff1744';
+            }
+          }
+        } catch (e) {
+          console.error("Telemetry sync error:", e);
+        }
+      };
+      ws.onclose = () => setTimeout(connectWS, 2000);
+    }
+    connectWS();
+  </script>
+</body>
+</html>

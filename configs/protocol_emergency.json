@@ -1,0 +1,102 @@
+{
+  "protocol_id": "BAS-EMERGENCY-01",
+  "experiment_name": "Airlock Depress & Emergency Hatch Seal",
+  "category": "EMERGENCY_PROCEDURE",
+  "facility": "Bharatiya Antariksh Station (BAS) - Node 1 Forward Airlock Tunnel",
+  "camera_tag": "CAM-04 • AIRLOCK FORWARD HATCH",
+  "camera_channel": "CAM-EMG-04-D",
+  "camera_location": "Node 1 Forward Airlock Bulkhead",
+  "max_allowed_step_time_sec": 20.0,
+  "steps": [
+    {
+      "step_id": 1,
+      "expected_action": "DON",
+      "expected_target": "Breather_Mask",
+      "description": "Raise hand to face to don emergency oxygen mask and verify positive pressure seal",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 15.0
+    },
+    {
+      "step_id": 2,
+      "expected_action": "ALIGN",
+      "expected_target": "Equalization_Valve",
+      "description": "Rotate cabin delta-P pressure equalization valve to ISOLATE position",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 15.0
+    },
+    {
+      "step_id": 3,
+      "expected_action": "PULL",
+      "expected_target": "Hatch_Dog_Handle",
+      "description": "Grasp and pull bulkhead hatch primary dogging handle 90 degrees to engage dogs",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 15.0
+    },
+    {
+      "step_id": 4,
+      "expected_action": "LOCK",
+      "expected_target": "Secondary_Lock",
+      "description": "Drive secondary mechanical safety lock bar into bulkhead doorframe detent",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 10.0
+    }
+  ],
+  "payload_targets": [
+    {
+      "object_id": "obj_breather_mask",
+      "class_name": "Breather_Mask",
+      "common_name": "Quick-Don Emergency O2 Mask",
+      "centroid": [0.22, 0.35],
+      "bbox": [140, 160, 220, 240],
+      "specs": {
+        "payload_id": "PL-EMG-MASK-01",
+        "microg_mass": "520 g",
+        "dimensions": "160mm x 180mm x 110mm",
+        "contents": "100% Pure O2 Diluter-Demand Regulator",
+        "hazard_level": "Life Safety Essential",
+        "destination_bay": "Crew Face Level",
+        "alignment_pin": "Nose & Chin Sealing Flange",
+        "handling": "Don with single or dual hands. Pull head harness straps firmly."
+      }
+    },
+    {
+      "object_id": "obj_eq_valve",
+      "class_name": "Equalization_Valve",
+      "common_name": "Manual Delta-P Equalization Valve",
+      "centroid": [0.50, 0.35],
+      "bbox": [320, 160, 400, 240],
+      "specs": {
+        "valve_id": "VALVE-DP-EQ-02",
+        "pressure_differential": "101.3 kPa to 0 kPa",
+        "seal_rating": "Hermetic Zero-Leakage Metal-to-Metal",
+        "status": "NORMAL - ROTATE TO ISOLATE"
+      }
+    },
+    {
+      "object_id": "obj_dog_handle",
+      "class_name": "Hatch_Dog_Handle",
+      "common_name": "Bulkhead Hatch Dogging Lever",
+      "centroid": [0.75, 0.65],
+      "bbox": [480, 310, 560, 390],
+      "specs": {
+        "mechanism_id": "MECH-HATCH-DOG-01",
+        "throw_angle": "90 deg Clockwise",
+        "locking_dogs": "8 Peripheral Steel Locking Dogs",
+        "indicator": "Optical Alignment Mark Red/Green"
+      }
+    },
+    {
+      "object_id": "obj_sec_lock",
+      "class_name": "Secondary_Lock",
+      "common_name": "Hatch Secondary Safety Lock Bar",
+      "centroid": [0.75, 0.85],
+      "bbox": [480, 410, 560, 490],
+      "specs": {
+        "lock_id": "LOCK-BAR-SEC-01",
+        "shear_strength": "45 kN",
+        "interlock": "Microswitch Telemetry to Mission Control",
+        "status": "DISENGAGED - DRIVE TO LOCK"
+      }
+    }
+  ]
+}

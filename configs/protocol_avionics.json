@@ -1,0 +1,103 @@
+{
+  "protocol_id": "BAS-EXP-AVIONICS-2026",
+  "experiment_name": "SpaceWire Bus Harness Routing & Torque",
+  "category": "AVIONICS_MAINTENANCE",
+  "facility": "Bharatiya Antariksh Station (BAS) - Avionics Bay 3 Rack",
+  "camera_tag": "CAM-03 • AVIONICS BAY 3 RACK",
+  "camera_channel": "CAM-AVN-03-C",
+  "camera_location": "Avionics Bay 3 Component Rack",
+  "max_allowed_step_time_sec": 30.0,
+  "steps": [
+    {
+      "step_id": 1,
+      "expected_action": "INSPECT",
+      "expected_target": "SpaceWire_Harness",
+      "description": "Inspect SpaceWire data bus harness connector pins and keyway (Left or Right Hand)",
+      "criticality": "HIGH",
+      "timeout_seconds": 25.0
+    },
+    {
+      "step_id": 2,
+      "expected_action": "CONNECT",
+      "expected_target": "Avionics_Port_4",
+      "description": "Align keyway and mate connector into circular Avionics Port 4 until detent clicks",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 25.0
+    },
+    {
+      "step_id": 3,
+      "expected_action": "TORQUE",
+      "expected_target": "Torque_Wrench",
+      "description": "Apply calibrated clockwise rotation with torque wrench to 4.5 Nm spec",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 20.0
+    },
+    {
+      "step_id": 4,
+      "expected_action": "SWITCH",
+      "expected_target": "Breaker_Toggle",
+      "description": "Flip 28V DC payload power circuit breaker toggle to ACTIVE",
+      "criticality": "HIGH",
+      "timeout_seconds": 15.0
+    }
+  ],
+  "payload_targets": [
+    {
+      "object_id": "obj_spw_harness",
+      "class_name": "SpaceWire_Harness",
+      "common_name": "SpaceWire Data Bus Harness",
+      "centroid": [0.22, 0.35],
+      "bbox": [140, 160, 220, 240],
+      "specs": {
+        "payload_id": "PL-SPW-HARNESS-04",
+        "microg_mass": "140 g",
+        "dimensions": "45mm dia connector x 450mm harness",
+        "contents": "High-Speed Quad-Twisted Pair Data Link",
+        "hazard_level": "ESD Sensitive (Class 2)",
+        "destination_bay": "Avionics_Port_4",
+        "alignment_pin": "Clocked Master Keyway (Key A)",
+        "handling": "Wear ground strap. Align index keyway before applying axial seating force."
+      }
+    },
+    {
+      "object_id": "obj_avionics_port",
+      "class_name": "Avionics_Port_4",
+      "common_name": "Circular Mil-Spec Avionics Port 4",
+      "centroid": [0.50, 0.35],
+      "bbox": [320, 160, 400, 240],
+      "specs": {
+        "port_id": "PORT-SPW-04-B",
+        "bandwidth": "200 Mbps Full-Duplex",
+        "bus_interface": "ECSS-E-ST-50-12C",
+        "status": "POWER OFF - READY FOR HARNESS"
+      }
+    },
+    {
+      "object_id": "obj_torque_wrench",
+      "class_name": "Torque_Wrench",
+      "common_name": "Calibrated 4.5 Nm Torque Tool",
+      "centroid": [0.75, 0.65],
+      "bbox": [480, 310, 560, 390],
+      "specs": {
+        "tool_id": "TOOL-TORQ-BAS-01",
+        "microg_mass": "380 g",
+        "torque_rating": "4.5 Nm Preset Click",
+        "material": "Beryllium-Copper Non-Magnetic",
+        "destination_bay": "Retainer Collar"
+      }
+    },
+    {
+      "object_id": "obj_breaker",
+      "class_name": "Breaker_Toggle",
+      "common_name": "28V DC Power Bus Breaker",
+      "centroid": [0.75, 0.85],
+      "bbox": [480, 410, 560, 490],
+      "specs": {
+        "switch_type": "Mil-Spec Heavy-Duty Toggle with Guard",
+        "voltage": "28 Vdc Essential Bus",
+        "current_rating": "15 A",
+        "guard_status": "SAFETY WIRE REMOVED"
+      }
+    }
+  ]
+}

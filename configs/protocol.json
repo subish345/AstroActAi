@@ -1,0 +1,137 @@
+{
+  "protocol_id": "BAS-EXP-BIO-2026",
+  "experiment_name": "Biological Specimen Insertion & Rack Seal",
+  "category": "BIOLOGICAL_EXPERIMENT",
+  "facility": "Bharatiya Antariksh Station (BAS) - Microgravity Science Glovebox",
+  "camera_tag": "CAM-01 \u2022 GLOVEBOX BIO-RACK",
+  "camera_channel": "CAM-MSG-01-A",
+  "camera_location": "Microgravity Science Glovebox Bay",
+  "max_allowed_step_time_sec": 30.0,
+  "steps": [
+    {
+      "step_id": 1,
+      "expected_action": "PICK",
+      "expected_target": "Component_A",
+      "description": "Pick up Component A from the payload storage bay (Left or Right Hand)",
+      "criticality": "HIGH",
+      "timeout_seconds": 30.0
+    },
+    {
+      "step_id": 2,
+      "expected_action": "ROTATE",
+      "expected_target": "Component_A",
+      "description": "Rotate Component A 90 degrees to align guide pins",
+      "criticality": "HIGH",
+      "timeout_seconds": 20.0
+    },
+    {
+      "step_id": 3,
+      "expected_action": "INSERT",
+      "expected_target": "Rack_Slot_1",
+      "description": "Insert Component A into Payload Slot 1",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 25.0
+    },
+    {
+      "step_id": 4,
+      "expected_action": "LOCK",
+      "expected_target": "Latch_Mechanism",
+      "description": "Engage and secure the container locking latch",
+      "criticality": "CRITICAL",
+      "timeout_seconds": 15.0
+    }
+  ],
+  "payload_targets": [
+    {
+      "object_id": "obj_comp_a",
+      "class_name": "Component_A",
+      "common_name": "Biospecimen Canister #01",
+      "centroid": [
+        0.22,
+        0.35
+      ],
+      "bbox": [
+        140,
+        160,
+        220,
+        240
+      ],
+      "specs": {
+        "payload_id": "PL-BIO-2026-A",
+        "microg_mass": "320 g",
+        "dimensions": "80mm x 220mm",
+        "contents": "Cellular Culture MicroG-4M",
+        "hazard_level": "Biosafety Level 2 (Sealed)",
+        "destination_bay": "Rack_Slot_1",
+        "alignment_pin": "90 deg Radial Offset",
+        "handling": "Ambidextrous pick (Left or Right Hand). Orient 90 deg guide pin before bay insertion."
+      }
+    },
+    {
+      "object_id": "obj_comp_b",
+      "class_name": "Component_B",
+      "common_name": "Secondary Dummy Canister",
+      "centroid": [
+        0.5,
+        0.35
+      ],
+      "bbox": [
+        320,
+        160,
+        400,
+        240
+      ],
+      "specs": {
+        "payload_id": "PL-DUMMY-2026-B",
+        "microg_mass": "280 g",
+        "dimensions": "80mm x 220mm",
+        "contents": "Inert Saline Calibration Gel",
+        "hazard_level": "Non-Hazardous (Calibration)",
+        "destination_bay": "Storage Bay 2 (DO NOT INSERT)",
+        "alignment_pin": "Non-Indexed",
+        "handling": "Calibration specimen only. Do not mix with live biological specimen."
+      }
+    },
+    {
+      "object_id": "obj_slot_1",
+      "class_name": "Rack_Slot_1",
+      "common_name": "Payload Incubation Slot 1",
+      "centroid": [
+        0.75,
+        0.65
+      ],
+      "bbox": [
+        480,
+        310,
+        560,
+        390
+      ],
+      "specs": {
+        "slot_id": "BAY-MSG-01-A",
+        "thermal_control": "Active 37.0 deg C",
+        "bus_interface": "SpaceWire Bus 4",
+        "latch_status": "UNLOCKED - READY"
+      }
+    },
+    {
+      "object_id": "obj_latch",
+      "class_name": "Latch_Mechanism",
+      "common_name": "Rotary Safety Retention Latch",
+      "centroid": [
+        0.75,
+        0.85
+      ],
+      "bbox": [
+        480,
+        410,
+        560,
+        490
+      ],
+      "specs": {
+        "mechanism_type": "Positive Cam-Lock",
+        "torque_rating": "4.5 Nm",
+        "indicator": "Mechanical Flag Green"
+      }
+    }
+  ]
+}

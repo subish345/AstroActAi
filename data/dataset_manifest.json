@@ -1,0 +1,80 @@
+{
+  "dataset_name": "BAS-MicroG-Payload-HAR",
+  "version": "1.0.0",
+  "domain": "Bharatiya Antariksh Station Microgravity Experiment Activity Recognition",
+  "reference_benchmarks": [
+    "MicroG-4M / MicroG-HAR (4,759 parabolic/space station video clips, 13,261 annotated microgravity actions)",
+    "Assembly101 (Fine-grained hand-object contact boundaries and tool grasping)",
+    "IKEA ASM (Spatio-temporal action graph transition evaluation)"
+  ],
+  "annotations": [
+    {
+      "frame_id": "frame_001429.jpg",
+      "timestamp_ms": 47633,
+      "astronaut_pose": {
+        "keypoints_2d": [
+          {"name": "nose", "x": 0.502, "y": 0.241, "confidence": 0.98},
+          {"name": "left_shoulder", "x": 0.432, "y": 0.320, "confidence": 0.95},
+          {"name": "right_shoulder", "x": 0.575, "y": 0.315, "confidence": 0.96},
+          {"name": "left_elbow", "x": 0.395, "y": 0.440, "confidence": 0.93},
+          {"name": "right_elbow", "x": 0.612, "y": 0.435, "confidence": 0.94},
+          {"name": "left_wrist", "x": 0.380, "y": 0.560, "confidence": 0.91},
+          {"name": "right_wrist", "x": 0.225, "y": 0.355, "confidence": 0.97}
+        ],
+        "rack_relative_3d": [
+          {"name": "nose", "rack_x": 0.002, "rack_y": -0.259, "rack_z": 0.85},
+          {"name": "left_shoulder", "rack_x": -0.068, "rack_y": -0.180, "rack_z": 0.88},
+          {"name": "right_shoulder", "rack_x": 0.075, "rack_y": -0.185, "rack_z": 0.87},
+          {"name": "right_wrist", "rack_x": -0.275, "rack_y": -0.145, "rack_z": 0.92}
+        ],
+        "body_roll_degrees": -18.4,
+        "wrist_velocity_ms": 0.12
+      },
+      "detected_objects": [
+        {
+          "label": "Component_A",
+          "bbox": [140, 160, 220, 240],
+          "state": "IN_HAND",
+          "contact_distance": 0.015
+        },
+        {
+          "label": "Component_B",
+          "bbox": [320, 160, 400, 240],
+          "state": "IDLE",
+          "contact_distance": 0.28
+        }
+      ],
+      "ground_truth_action": "ROTATE",
+      "protocol_step_valid": true,
+      "step_id": 2
+    },
+    {
+      "frame_id": "frame_001550.jpg",
+      "timestamp_ms": 51720,
+      "astronaut_pose": {
+        "keypoints_2d": [
+          {"name": "right_wrist", "x": 0.505, "y": 0.352, "confidence": 0.96}
+        ],
+        "rack_relative_3d": [
+          {"name": "right_wrist", "rack_x": 0.005, "rack_y": -0.148, "rack_z": 0.91}
+        ],
+        "body_roll_degrees": 5.2,
+        "wrist_velocity_ms": 0.28
+      },
+      "detected_objects": [
+        {
+          "label": "Component_B",
+          "bbox": [320, 160, 400, 240],
+          "state": "IN_HAND",
+          "contact_distance": 0.012
+        }
+      ],
+      "ground_truth_action": "PICK",
+      "protocol_step_valid": false,
+      "expected_target": "Component_A",
+      "detected_target": "Component_B",
+      "fault_type": "WRONG_OBJECT",
+      "step_id": 1
+    }
+  ]
+}
