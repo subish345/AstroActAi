@@ -846,14 +846,7 @@ function playAlertChime() {
   }
 }
 
-function updateMissionClock() {
-  const now = new Date();
-  const utcStr = now.toISOString().substring(11, 19) + " UTC";
-  const el = document.getElementById("mission-clock");
-  if (el) el.textContent = utcStr;
-}
-setInterval(updateMissionClock, 1000);
-updateMissionClock();
+
 
 async function loadProtocolsList() {
   try {
@@ -881,7 +874,7 @@ async function loadProtocolsList() {
 
 const PROTOCOL_CAMERA_MAP = {
   "BAS-EXP-BIO-2026": {
-    camera_tag: "CAM-01 • GLOVEBOX BIO-RACK",
+    camera_tag: "OPTICAL HUD",
     camera_channel: "CAM-MSG-01-A",
     facility: "Bharatiya Antariksh Station (BAS) - Microgravity Science Glovebox",
     location: "Microgravity Science Glovebox Bay"

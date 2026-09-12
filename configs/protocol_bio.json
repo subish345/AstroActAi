@@ -3,7 +3,7 @@
   "experiment_name": "Biological Specimen Insertion & Rack Seal",
   "category": "BIOLOGICAL_EXPERIMENT",
   "facility": "Bharatiya Antariksh Station (BAS) - Microgravity Science Glovebox",
-  "camera_tag": "CAM-01 • GLOVEBOX BIO-RACK",
+  "camera_tag": "OPTICAL HUD",
   "camera_channel": "CAM-MSG-01-A",
   "camera_location": "Microgravity Science Glovebox Bay",
   "max_allowed_step_time_sec": 30.0,

@@ -384,6 +384,12 @@ class ActionCandidate:
 class MissionControlLink:
     """Handles local flight logs and uplink dispatch to Ground Station."""
 
+    _speech_queue: queue.Queue = queue.Queue()
+    _procedure_completed: bool = False
+    _speech_worker_started: bool = False
+    _tts_engine: Optional[Any] = None
+    _lock: threading.Lock = threading.Lock()
+
     def __init__(self, ground_url: str = "http://127.0.0.1:8000", log_file: str = "telemetry/flight_log.jsonl"):
         self.ground_url = ground_url.rstrip("/")
         self.log_file = log_file
@@ -395,13 +401,68 @@ class MissionControlLink:
         self._telemetry_worker_thread = threading.Thread(target=self._telemetry_worker, daemon=True)
         self._telemetry_worker_thread.start()
 
-        self.tts = None
+        with MissionControlLink._lock:
+            if not MissionControlLink._speech_worker_started:
+                MissionControlLink._speech_worker_started = True
+                threading.Thread(target=MissionControlLink._speech_worker, daemon=True).start()
+
+    @classmethod
+    def _speech_worker(cls):
+        """Worker consuming voice alert messages sequentially without overlapping threads."""
+        tts_engine = None
         if TTS_ENABLED:
             try:
-                self.tts = pyttsx3.init()
-                self.tts.setProperty('rate', 155)
+                tts_engine = pyttsx3.init()
+                tts_engine.setProperty('rate', 160)
             except Exception as e:
                 logger.debug(f"Offline voice synthesizer initialization: {e}")
+                tts_engine = None
+
+        while True:
+            try:
+                text = cls._speech_queue.get()
+                if text is None:
+                    break
+                if tts_engine:
+                    try:
+                        tts_engine.say(text)
+                        tts_engine.runAndWait()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    def speak(self, text: str, is_final: bool = False):
+        """Asynchronous crew auditory alert. Dropped if procedure is already completed."""
+        with MissionControlLink._lock:
+            if MissionControlLink._procedure_completed and not is_final:
+                return
+
+            if is_final:
+                MissionControlLink._procedure_completed = True
+                # Drain any older pending speech alerts so they don't delay or play after completion
+                while not MissionControlLink._speech_queue.empty():
+                    try:
+                        MissionControlLink._speech_queue.get_nowait()
+                    except Exception:
+                        break
+
+            print(f"\n🔔 [VOICE ALERT CHIME]: \"{text}\"\n")
+            MissionControlLink._speech_queue.put(text)
+
+    def mark_procedure_completed(self, final_text: str = "The procedure is ended."):
+        """Immediately ends alerts and speaks only the final completion phrase."""
+        self.speak(final_text, is_final=True)
+
+    def reset_procedure_state(self):
+        """Resets procedure completed state when starting a new experiment/protocol."""
+        with MissionControlLink._lock:
+            MissionControlLink._procedure_completed = False
+            while not MissionControlLink._speech_queue.empty():
+                try:
+                    MissionControlLink._speech_queue.get_nowait()
+                except Exception:
+                    break
 
     def _telemetry_worker(self):
         """Worker consuming real-time telemetry packets at camera speed without blocking capture loop."""
@@ -412,20 +473,6 @@ class MissionControlLink:
                 self.session.post(url, json=payload, timeout=0.15)
             except Exception:
                 pass
-
-    def speak(self, text: str):
-        """Asynchronous crew auditory alert."""
-        def _say():
-            if self.tts:
-                try:
-                    engine = pyttsx3.init()
-                    engine.setProperty('rate', 155)
-                    engine.say(text)
-                    engine.runAndWait()
-                except Exception:
-                    pass
-            print(f"\n🔔 [VOICE ALERT CHIME]: \"{text}\"\n")
-        threading.Thread(target=_say, daemon=True).start()
 
     def transmit(self, endpoint: str, payload: Dict[str, Any]):
         """Persists locally and transmits telemetry asynchronously."""
@@ -576,8 +623,8 @@ class MissionControlLink:
         self.transmit("/api/v1/telemetry/heartbeat", payload)
 
     def send_experiment_complete(self, protocol_id: str, step_id: int, pose: AstronautPose):
-        msg = f"Protocol {protocol_id} successfully completed. 100 percent compliance verified."
-        self.speak(msg)
+        msg = "The procedure is ended."
+        self.mark_procedure_completed(msg)
         kps_dump = {k: {"x": round(v.x, 3), "y": round(v.y, 3), "z": round(v.z, 3)} for k, v in pose.keypoints.items()}
         left_leg_dict = {
             "detected": pose.left_leg.is_detected,
@@ -1219,8 +1266,9 @@ class DualHandInteractionClassifier:
         "Component_A", "Component_B", "Syringe_Injector", "SpaceWire_Harness", "Breather_Mask"
     }
 
-    def __init__(self, proximity_threshold: float = 0.12):
+    def __init__(self, proximity_threshold: float = 0.14):
         self.proximity_threshold = proximity_threshold
+        self._debug_frame_counter = 0
         self.left_held_object: Optional[str] = None
         self.left_held_specs: Optional[Dict[str, Any]] = None
         self.right_held_object: Optional[str] = None
@@ -1230,8 +1278,10 @@ class DualHandInteractionClassifier:
         self.rotate_frames_count: int = 0
         self.left_dwell_target: Optional[str] = None
         self.left_dwell_frames: int = 0
+        self.left_miss_frames: int = 0
         self.right_dwell_target: Optional[str] = None
         self.right_dwell_frames: int = 0
+        self.right_miss_frames: int = 0
 
     def reset(self):
         """Resets all held objects, slots, and dwell tracking (e.g. on protocol switch)."""
@@ -1244,8 +1294,10 @@ class DualHandInteractionClassifier:
         self.rotate_frames_count = 0
         self.left_dwell_target = None
         self.left_dwell_frames = 0
+        self.left_miss_frames = 0
         self.right_dwell_target = None
         self.right_dwell_frames = 0
+        self.right_miss_frames = 0
 
     def evaluate_hands_and_objects(
         self,
@@ -1253,7 +1305,8 @@ class DualHandInteractionClassifier:
         payload_targets: List[DetectedObject],
         ai_detected_objects: List[DetectedObject],
         current_step: Optional[Dict[str, Any]] = None,
-        current_step_idx: int = 0
+        current_step_idx: int = 0,
+        all_steps: Optional[List[Dict[str, Any]]] = None
     ) -> Optional[ActionCandidate]:
         """Evaluates both hands independently against payload targets and AI-detected objects."""
         exp_act = current_step.get("expected_action") if current_step else None
@@ -1296,26 +1349,34 @@ class DualHandInteractionClassifier:
         else:
             right_min_dist = float("inf")
 
-        # 3. Update Dwell Tracking (Requires staying inside station zone)
+        # 3. Update Dwell Tracking with 2-frame jitter grace tolerance
         if left_closest_obj and left_min_dist < self.proximity_threshold:
+            self.left_miss_frames = 0
             if self.left_dwell_target == left_closest_obj.class_name:
                 self.left_dwell_frames += 1
             else:
                 self.left_dwell_target = left_closest_obj.class_name
                 self.left_dwell_frames = 1
+        elif self.left_dwell_target and self.left_miss_frames < 2:
+            self.left_miss_frames += 1
         else:
             self.left_dwell_target = None
             self.left_dwell_frames = 0
+            self.left_miss_frames = 0
 
         if right_closest_obj and right_min_dist < self.proximity_threshold:
+            self.right_miss_frames = 0
             if self.right_dwell_target == right_closest_obj.class_name:
                 self.right_dwell_frames += 1
             else:
                 self.right_dwell_target = right_closest_obj.class_name
                 self.right_dwell_frames = 1
+        elif self.right_dwell_target and self.right_miss_frames < 2:
+            self.right_miss_frames += 1
         else:
             self.right_dwell_target = None
             self.right_dwell_frames = 0
+            self.right_miss_frames = 0
 
         # 4. Check Hand-to-Hand Transfer (Handoff)
         if pose.left_hand and pose.right_hand and pose.left_hand.is_detected and pose.right_hand.is_detected:
@@ -1368,15 +1429,13 @@ class DualHandInteractionClassifier:
                     self.right_held_object = self.right_dwell_target
                     self.right_held_specs = right_closest_obj.specs if right_closest_obj else {}
 
-            # If hand moves far away, release
-            if self.left_held_object and left_min_dist > 0.32:
+            if self.left_held_object and left_min_dist > 0.35:
                 self.left_held_object = None
                 self.left_held_specs = None
-            if self.right_held_object and right_min_dist > 0.32:
+            if self.right_held_object and right_min_dist > 0.35:
                 self.right_held_object = None
                 self.right_held_specs = None
 
-            # Re-sync held status to pose
             pose.left_hand.held_object = self.left_held_object
             pose.left_hand.held_object_data = self.left_held_specs
             pose.right_hand.held_object = self.right_held_object
@@ -1400,142 +1459,84 @@ class DualHandInteractionClassifier:
                 pose.held_payload = None
                 return None
 
-        # 5. STEP-SPECIFIC INTENTIONAL CLASSIFICATION
+        # 5. STEP-SPECIFIC INTENTIONAL CLASSIFICATION & ERROR CHECKING
+        DWELL_REQ = 6
 
-        # --- STEP 1 (Step idx 0): PICK / INSPECT / DON ---
-        if current_step_idx == 0:
-            # Check if astronaut is picking up with LEFT hand
-            if self.left_dwell_target and self.left_dwell_frames >= 4:
-                tgt_name = self.left_dwell_target
-                specs = left_closest_obj.specs if left_closest_obj else {}
-                self.left_held_object = tgt_name
-                self.left_held_specs = specs
-                pose.active_hand = "LEFT"
-                action_name = "DON" if exp_act == "DON" else ("INSPECT" if exp_act == "INSPECT" else "PICK")
-                return ActionCandidate(action_name, tgt_name, 0.96, time.time(), "LEFT", pose.held_payload)
+        active_dwells = []
+        for h_name, dwell_tgt, dwell_f, c_obj in [
+            ("LEFT", self.left_dwell_target, self.left_dwell_frames, left_closest_obj),
+            ("RIGHT", self.right_dwell_target, self.right_dwell_frames, right_closest_obj)
+        ]:
+            if dwell_tgt and dwell_f >= DWELL_REQ:
+                active_dwells.append((h_name, dwell_tgt, dwell_f, c_obj))
 
-            # Check if astronaut is picking up with RIGHT hand
-            if self.right_dwell_target and self.right_dwell_frames >= 4:
-                tgt_name = self.right_dwell_target
-                specs = right_closest_obj.specs if right_closest_obj else {}
-                self.right_held_object = tgt_name
-                self.right_held_specs = specs
-                pose.active_hand = "RIGHT"
-                action_name = "DON" if exp_act == "DON" else ("INSPECT" if exp_act == "INSPECT" else "PICK")
-                return ActionCandidate(action_name, tgt_name, 0.96, time.time(), "RIGHT", pose.held_payload)
-
-            # Resting / idle hands: return None!
-            return None
-
-        # --- STEP 2 (Step idx 1): ROTATE / INJECT / CONNECT / ALIGN ---
-        if current_step_idx == 1:
-            # Case A: Bio Rotation (must hold component and rotate)
-            if exp_act == "ROTATE":
-                if holding_hand:
-                    if self.rotate_baseline_roll is None:
-                        self.rotate_baseline_roll = pose.body_roll_degrees
-                    delta_roll = abs(pose.body_roll_degrees - self.rotate_baseline_roll)
-                    hand_state = pose.left_hand if holding_hand == "LEFT" else pose.right_hand
-                    vel = hand_state.velocity if hand_state else 0.0
-                    if delta_roll > 12.0 or vel > 0.08:
-                        self.rotate_frames_count += 1
-                    if self.rotate_frames_count >= 3:
-                        return ActionCandidate("ROTATE", held_obj_name or exp_tgt, 0.95, time.time(), holding_hand, pose.held_payload)
-                    return None
-                return None
-
-            # Case B: Fluid Injection (Syringe held in hand brought to Sample_Vial)
-            elif exp_act == "INJECT":
-                if holding_hand:
-                    hand_tgt = self.left_dwell_target if holding_hand == "LEFT" else self.right_dwell_target
-                    hand_dwell = self.left_dwell_frames if holding_hand == "LEFT" else self.right_dwell_frames
-                    if hand_tgt and ("Sample" in hand_tgt or "Vial" in hand_tgt) and hand_dwell >= 4:
-                        return ActionCandidate("INJECT", "Sample_Vial", 0.95, time.time(), holding_hand, pose.held_payload)
-                return None
-
-            # Case C: Avionics Connect (SpaceWire_Harness held in hand mated into Avionics_Port_4)
-            elif exp_act == "CONNECT":
-                if holding_hand:
-                    hand_tgt = self.left_dwell_target if holding_hand == "LEFT" else self.right_dwell_target
-                    hand_dwell = self.left_dwell_frames if holding_hand == "LEFT" else self.right_dwell_frames
-                    if hand_tgt and ("Avionic" in hand_tgt or "Port_4" in hand_tgt) and hand_dwell >= 4:
-                        return ActionCandidate("CONNECT", "Avionics_Port_4", 0.95, time.time(), holding_hand, pose.held_payload)
-                return None
-
-            # Case D: Emergency Align (Valve rotation)
-            elif exp_act == "ALIGN":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and ("Valve" in dwell_tgt or "Equalization" in dwell_tgt) and dwell_f >= 4:
-                        return ActionCandidate("ALIGN", "Equalization_Valve", 0.95, time.time(), h_name, pose.held_payload)
-                return None
-
-            # Check intentional Skipped Step: astronaut holding Component_A skips rotate and goes to Rack_Slot_1
+        # Special Case: Bio Roll rotation in Step 1
+        if current_step_idx == 1 and exp_act == "ROTATE":
             if holding_hand:
-                hand_tgt = self.left_dwell_target if holding_hand == "LEFT" else self.right_dwell_target
-                hand_dwell = self.left_dwell_frames if holding_hand == "LEFT" else self.right_dwell_frames
-                if hand_tgt and "Slot" in hand_tgt and hand_dwell >= 4:
-                    return ActionCandidate("INSERT", "Rack_Slot_1", 0.95, time.time(), holding_hand, pose.held_payload)
+                if self.rotate_baseline_roll is None:
+                    self.rotate_baseline_roll = pose.body_roll_degrees
+                delta_roll = abs(pose.body_roll_degrees - self.rotate_baseline_roll)
+                hand_state = pose.left_hand if holding_hand == "LEFT" else pose.right_hand
+                vel = hand_state.velocity if hand_state else 0.0
+                if delta_roll > 10.0 or vel > 0.08:
+                    self.rotate_frames_count += 1
+                if self.rotate_frames_count >= 3:
+                    return ActionCandidate("ROTATE", held_obj_name or exp_tgt, 0.95, time.time(), holding_hand, pose.held_payload)
+            # Check skipped step during rotate: hand directly goes to Rack_Slot_1
+            for h_name, dwell_tgt, dwell_f, c_obj in active_dwells:
+                if "Slot" in dwell_tgt or "Rack" in dwell_tgt:
+                    return ActionCandidate("INSERT", "Rack_Slot_1", 0.95, time.time(), h_name, pose.held_payload)
             return None
 
-        # --- STEP 3 (Step idx 2): INSERT / MATE / TORQUE / PULL ---
-        if current_step_idx == 2:
-            # Case A: Bio Insert (holding hand brings component into Rack_Slot_1)
-            if exp_act == "INSERT":
-                if holding_hand:
-                    hand_tgt = self.left_dwell_target if holding_hand == "LEFT" else self.right_dwell_target
-                    hand_dwell = self.left_dwell_frames if holding_hand == "LEFT" else self.right_dwell_frames
-                    if hand_tgt and "Slot" in hand_tgt and hand_dwell >= 4:
-                        return ActionCandidate("INSERT", "Rack_Slot_1", 0.96, time.time(), holding_hand, pose.held_payload)
-                return None
+        # General step evaluation for all other steps
+        if active_dwells:
+            h_name, dwell_tgt, dwell_f, c_obj = active_dwells[0]
+            specs = c_obj.specs if c_obj else {}
 
-            # Case B: Fluid Mate (holding hand brings syringe into Manifold_Port_A)
-            elif exp_act == "MATE":
-                if holding_hand:
-                    hand_tgt = self.left_dwell_target if holding_hand == "LEFT" else self.right_dwell_target
-                    hand_dwell = self.left_dwell_frames if holding_hand == "LEFT" else self.right_dwell_frames
-                    if hand_tgt and ("Manifold" in hand_tgt or "Port_A" in hand_tgt) and hand_dwell >= 4:
-                        return ActionCandidate("MATE", "Manifold_Port_A", 0.96, time.time(), holding_hand, pose.held_payload)
-                return None
+            # Check if dwelling target matches the expected target
+            matches_expected = False
+            if exp_tgt:
+                if dwell_tgt == exp_tgt:
+                    matches_expected = True
+                elif ("Syringe" in dwell_tgt and "Syringe" in exp_tgt) or \
+                     ("Sample" in dwell_tgt and "Sample" in exp_tgt) or \
+                     ("Manifold" in dwell_tgt and "Manifold" in exp_tgt) or \
+                     ("Pinch" in dwell_tgt and "Pinch" in exp_tgt) or \
+                     ("Slot" in dwell_tgt and "Slot" in exp_tgt) or \
+                     ("Latch" in dwell_tgt and "Latch" in exp_tgt) or \
+                     ("Secondary" in dwell_tgt and "Secondary" in exp_tgt) or \
+                     ("Torque" in dwell_tgt and "Torque" in exp_tgt) or \
+                     ("Breaker" in dwell_tgt and "Breaker" in exp_tgt) or \
+                     ("Hatch" in dwell_tgt and "Hatch" in exp_tgt) or \
+                     ("Valve" in dwell_tgt and "Valve" in exp_tgt) or \
+                     ("Avionic" in dwell_tgt and "Avionic" in exp_tgt) or \
+                     ("Mask" in dwell_tgt and "Mask" in exp_tgt) or \
+                     ("Harness" in dwell_tgt and "Harness" in exp_tgt):
+                    matches_expected = True
 
-            # Case C: Avionics Torque (Hand operates Torque_Wrench)
-            elif exp_act == "TORQUE":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and ("Torque" in dwell_tgt or "Wrench" in dwell_tgt) and dwell_f >= 4:
-                        return ActionCandidate("TORQUE", "Torque_Wrench", 0.95, time.time(), h_name, pose.held_payload)
-                return None
+            if matches_expected:
+                # COMPLIANT STEP ACTION
+                pose.active_hand = h_name
+                if current_step_idx == 0:
+                    self.left_held_object = exp_tgt if h_name == "LEFT" else None
+                    self.left_held_specs = specs if h_name == "LEFT" else None
+                    self.right_held_object = exp_tgt if h_name == "RIGHT" else None
+                    self.right_held_specs = specs if h_name == "RIGHT" else None
+                return ActionCandidate(exp_act, exp_tgt, 0.96, time.time(), h_name, pose.held_payload)
 
-            # Case D: Emergency Pull (Hand operates Hatch_Dog_Handle)
-            elif exp_act == "PULL":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and ("Hatch" in dwell_tgt or "Dog" in dwell_tgt) and dwell_f >= 4:
-                        return ActionCandidate("PULL", "Hatch_Dog_Handle", 0.95, time.time(), h_name, pose.held_payload)
-                return None
+            # Check if this target belongs to a FUTURE step (Skipped step error)
+            future_steps = (all_steps or [])[current_step_idx + 1:]
+            for f_step in future_steps:
+                f_tgt = f_step.get("expected_target", "")
+                f_act = f_step.get("expected_action", "")
+                if f_tgt and (dwell_tgt == f_tgt or f_tgt in dwell_tgt or dwell_tgt in f_tgt):
+                    logger.warning(f"Skipped step detected: hand touched future target {f_tgt}")
+                    return ActionCandidate(f_act, f_tgt, 0.95, time.time(), h_name, pose.held_payload)
 
-            return None
-
-        # --- STEP 4 (Step idx >= 3): LOCK / CLAMP / SWITCH ---
-        if current_step_idx >= 3:
-            # Case A: Lock Latch Mechanism / Secondary Lock
-            if exp_act == "LOCK":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and ("Latch" in dwell_tgt or "Secondary" in dwell_tgt or "Sec" in dwell_tgt) and dwell_f >= 4:
-                        target = "Secondary_Lock" if "Secondary" in exp_tgt else "Latch_Mechanism"
-                        return ActionCandidate("LOCK", target, 0.96, time.time(), h_name, pose.held_payload)
-                return None
-
-            # Case B: Clamp Pinch Valve
-            elif exp_act == "CLAMP":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and "Pinch" in dwell_tgt and dwell_f >= 4:
-                        return ActionCandidate("CLAMP", "Pinch_Valve", 0.96, time.time(), h_name, pose.held_payload)
-                return None
-
-            # Case C: Switch Breaker Toggle
-            elif exp_act == "SWITCH":
-                for h_name, dwell_tgt, dwell_f in [("LEFT", self.left_dwell_target, self.left_dwell_frames), ("RIGHT", self.right_dwell_target, self.right_dwell_frames)]:
-                    if dwell_tgt and ("Breaker" in dwell_tgt or "Toggle" in dwell_tgt or "Switch" in dwell_tgt) and dwell_f >= 4:
-                        return ActionCandidate("SWITCH", "Breaker_Toggle", 0.96, time.time(), h_name, pose.held_payload)
-                return None
+            # Otherwise, astronaut interacted with the WRONG payload (Wrong object error)
+            logger.warning(f"Wrong object detected: touched {dwell_tgt}, expected {exp_tgt}")
+            act_name = exp_act or "PICK"
+            return ActionCandidate(act_name, dwell_tgt, 0.95, time.time(), h_name, pose.held_payload)
 
         return None
 
@@ -1556,17 +1557,33 @@ class ProtocolComplianceEngine:
 
         self.current_step_idx = 0
         self.step_start_time = time.time()
-        self.last_step_time = 0.0
-        self.min_step_cooldown = 1.5 # Refractory period: prevents cascading across steps
+        self.min_step_cooldown = 1.5  # Refractory period: prevents cascading across steps
+        self.last_step_time = time.time() - self.min_step_cooldown  # First step allowed immediately
         self.is_completed = False
+        if self.mc_link and hasattr(self.mc_link, "reset_procedure_state"):
+            self.mc_link.reset_procedure_state()
 
         self.action_history: List[str] = []
-        self.debounce_size = 8 # 8 frames of consistent action (~0.4 - 0.5s)
+        self.debounce_size = 6 # 6 frames of consistent action (~0.2s at 30fps)
+        self.active_deviation_banner: Optional[Dict[str, Any]] = None
 
         # Alert cooldown to eliminate voice repetition
         self.last_deviation_time = 0.0
         self.last_deviation_msg = ""
         self.deviation_cooldown = 4.0
+
+    def reset(self):
+        self.current_step_idx = 0
+        self.step_start_time = time.time()
+        self.min_step_cooldown = 1.5
+        self.last_step_time = time.time() - self.min_step_cooldown  # First step allowed immediately
+        self.is_completed = False
+        self.action_history.clear()
+        self.active_deviation_banner = None
+        self.last_deviation_time = 0.0
+        self.last_deviation_msg = ""
+        if self.mc_link and hasattr(self.mc_link, "reset_procedure_state"):
+            self.mc_link.reset_procedure_state()
 
     def current_step(self) -> Optional[Dict[str, Any]]:
         if self.current_step_idx < len(self.steps):
@@ -1601,17 +1618,20 @@ class ProtocolComplianceEngine:
 
         # CASE 1: Compliant Step Transition (Ambidextrous)
         if candidate.action_type == exp_act and candidate.target_object == exp_tgt:
-            logger.info(f"✓ [STEP {step_id} COMPLIANT] Hand: {candidate.hand} | {exp_act} -> {exp_tgt}")
-            self.mc_link.send_step_verified(self.protocol_id, step_id, f"{exp_act} {exp_tgt}", candidate.hand, pose)
             self.current_step_idx += 1
             self.last_step_time = time.time()
             self.step_start_time = time.time()
             self.action_history.clear()
+            self.active_deviation_banner = None
 
             if self.current_step_idx >= len(self.steps):
                 self.is_completed = True
+                logger.info(f"✓ [STEP {step_id} COMPLIANT] Hand: {candidate.hand} | {exp_act} -> {exp_tgt}")
                 logger.info("🏆 PROTOCOL COMPLETE: 100% compliance verified across all steps!")
                 self.mc_link.send_experiment_complete(self.protocol_id, step_id, pose)
+            else:
+                logger.info(f"✓ [STEP {step_id} COMPLIANT] Hand: {candidate.hand} | {exp_act} -> {exp_tgt}")
+                self.mc_link.send_step_verified(self.protocol_id, step_id, f"{exp_act} {exp_tgt}", candidate.hand, pose)
             return
 
         # CASE 2: Wrong Object Interaction
@@ -1619,6 +1639,12 @@ class ProtocolComplianceEngine:
             msg = f"Protocol deviation: Expected {exp_tgt}, but {candidate.target_object} was picked with {candidate.hand} hand."
             logger.warning(f"⚠️ {msg}")
             now = time.time()
+            self.active_deviation_banner = {
+                "type": "WRONG_OBJECT",
+                "title": "PROTOCOL DEVIATION: WRONG OBJECT",
+                "message": f"Expected: {exp_tgt} | Detected: {candidate.target_object} ({candidate.hand} Hand)",
+                "expires": now + 4.0
+            }
             if (now - self.last_deviation_time) >= self.deviation_cooldown or msg != self.last_deviation_msg:
                 self.mc_link.send_deviation_alert(self.protocol_id, step_id, "WRONG_OBJECT", msg, action_signature, pose)
                 self.last_deviation_time = now
@@ -1633,6 +1659,12 @@ class ProtocolComplianceEngine:
                 msg = f"Warning: Required action '{exp_act} {exp_tgt}' was skipped. Detected subsequent step '{future['expected_action']} {future['expected_target']}' out of order."
                 logger.warning(f"⚠️ {msg}")
                 now = time.time()
+                self.active_deviation_banner = {
+                    "type": "SKIPPED_STEP",
+                    "title": "PROTOCOL DEVIATION: STEP SKIPPED",
+                    "message": f"Skipped required: {exp_act} {exp_tgt} | Touched: {candidate.target_object}",
+                    "expires": now + 4.0
+                }
                 if (now - self.last_deviation_time) >= self.deviation_cooldown or msg != self.last_deviation_msg:
                     self.mc_link.send_deviation_alert(self.protocol_id, step_id, "SKIPPED_STEP", msg, action_signature, pose)
                     self.last_deviation_time = now
@@ -1652,7 +1684,7 @@ class AstronautMonitoringSystem:
         self.mc_link = MissionControlLink(ground_url=ground_url)
         self.pose_engine = MicrogravityPoseEngine(delegate=delegate)
         self.object_detector = AIPayloadObjectDetector(delegate=delegate)
-        self.classifier = DualHandInteractionClassifier(proximity_threshold=0.12)
+        self.classifier = DualHandInteractionClassifier(proximity_threshold=0.14)
         self.protocol_mtime = 0.0
         self.payload_targets: List[DetectedObject] = []
         self.load_protocol_config()
@@ -1719,29 +1751,23 @@ class AstronautMonitoringSystem:
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 480
         fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
 
+        window_name = "ASTRO-COPILOT | Zero-G Edge Computer Optical Telemetry"
+        if not headless:
+            cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+            if fullscreen:
+                cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            else:
+                cv2.resizeWindow(window_name, w, h)
+
         video_writer = None
         session_filename = None
         if record:
             os.makedirs("telemetry/sessions", exist_ok=True)
-            timestamp_str = time.strftime("%Y%m%d_%H%M%S")
-            session_filename = f"astronaut_session_{timestamp_str}.avi"
-            session_path = os.path.join("telemetry/sessions", session_filename)
-            fourcc = cv2.VideoWriter_fourcc(*'XVID')
-            video_writer = cv2.VideoWriter(session_path, fourcc, fps, (w, h))
-            logger.info(f"📹 Recording astronaut experiment session to: {session_path}")
-
-        window_name = "AstroActAi — Edge Station HUD (Dual Hand 3D)"
-        is_enlarged = enlarge
-        is_fullscreen = fullscreen
-        if not headless:
-            try:
-                cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                win_w, win_h = (width, height) if is_enlarged else (w, h)
-                cv2.resizeWindow(window_name, win_w, win_h)
-                if is_fullscreen:
-                    cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-            except Exception as e:
-                logger.debug(f"Window setup: {e}")
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            session_filename = f"telemetry/sessions/astronaut_session_{ts}.avi"
+            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            video_writer = cv2.VideoWriter(session_filename, fourcc, fps, (w, h))
+            logger.info(f"📹 Recording astronaut experiment session to: {session_filename}")
 
         logger.info("Astronaut Copilot Dual-Hand Active. [Q] Quit | [E] Toggle Enlarge (1280x720) | [F] Fullscreen")
         frame_counter = 0
@@ -1773,7 +1799,8 @@ class AstronautMonitoringSystem:
                     self.payload_targets,
                     ai_objects,
                     current_step=self.compliance_engine.current_step(),
-                    current_step_idx=self.compliance_engine.current_step_idx
+                    current_step_idx=self.compliance_engine.current_step_idx,
+                    all_steps=self.compliance_engine.steps
                 )
 
                 # 4. Ambidextrous Protocol Verification
@@ -1788,7 +1815,7 @@ class AstronautMonitoringSystem:
                     step = self.compliance_engine.current_step()
                     step_id = step["step_id"] if step else len(self.compliance_engine.steps)
                     active_str = f"{action.action_type} {action.target_object} ({action.hand} HAND)" if action else ("COMPLETED • CONTINUOUS MONITORING" if self.compliance_engine.is_completed else "MONITORING")
-                    cam_tag = self.compliance_engine.protocol_data.get("camera_tag", "CAM-01 • GLOVEBOX BIO-RACK")
+                    cam_tag = self.compliance_engine.protocol_data.get("camera_tag", "OPTICAL HUD")
                     cam_chan = self.compliance_engine.protocol_data.get("camera_channel", "CAM-MSG-01-A")
                     self.mc_link.send_heartbeat(self.compliance_engine.protocol_id, step_id, pose, active_str, camera_tag=cam_tag, camera_channel=cam_chan)
                     self.last_heartbeat_time = time.time()
@@ -1856,6 +1883,144 @@ class AstronautMonitoringSystem:
                 pass
             logger.info("Camera window and capture device cleanly closed.")
 
+    @staticmethod
+    def _draw_hud_box(
+        frame: np.ndarray,
+        pt1: Tuple[int, int],
+        pt2: Tuple[int, int],
+        border_color: Optional[Tuple[int, int, int]] = (0, 229, 255),
+        border_thickness: int = 1,
+        alpha: float = 0.0,
+        bg_color: Tuple[int, int, int] = (10, 15, 25)
+    ):
+        """Draws a 100% transparent HUD container box (zero background fill) so camera feed and procedure dots remain completely visible."""
+        x1, y1 = max(0, min(pt1[0], pt2[0])), max(0, min(pt1[1], pt2[1]))
+        x2, y2 = min(frame.shape[1], max(pt1[0], pt2[0])), min(frame.shape[0], max(pt1[1], pt2[1]))
+        if alpha > 0.0 and x2 > x1 and y2 > y1:
+            overlay = frame[y1:y2, x1:x2]
+            bg = np.full_like(overlay, bg_color, dtype=np.uint8)
+            frame[y1:y2, x1:x2] = cv2.addWeighted(bg, alpha, overlay, 1.0 - alpha, 0)
+        if border_color is not None and border_thickness > 0:
+            cv2.rectangle(frame, (x1, y1), (x2, y2), border_color, border_thickness)
+
+    @staticmethod
+    def _draw_shadowed_text(
+        frame: np.ndarray,
+        text: str,
+        org: Tuple[int, int],
+        font_face: int,
+        font_scale: float,
+        color: Tuple[int, int, int],
+        thickness: int = 1
+    ):
+        """Renders high-contrast text with a black drop shadow for maximum legibility on transparent HUDs."""
+        cv2.putText(frame, text, (org[0] + 1, org[1] + 1), font_face, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+        cv2.putText(frame, text, org, font_face, font_scale, color, thickness, cv2.LINE_AA)
+
+    def _render_procedure_dots(
+        self,
+        frame: np.ndarray,
+        w: int,
+        h: int,
+        pose: Optional[AstronautPose] = None,
+        current_step: Optional[Dict[str, Any]] = None
+    ):
+        """Renders procedure target stations with vivid neon glow, high-contrast labels,
+        interactive laser guides from approaching hands, and real-time dwell progress rings."""
+        exp_tgt = current_step.get("expected_target") if current_step else None
+
+        # Extract active hand positions for interactive targeting guides
+        hands = []
+        if pose:
+            if pose.left_hand and pose.left_hand.is_detected:
+                lx = int(pose.left_hand.screen_pos[0] * w)
+                ly = int(pose.left_hand.screen_pos[1] * h)
+                hands.append(("LEFT", (lx, ly), pose.left_hand))
+            if pose.right_hand and pose.right_hand.is_detected:
+                rx = int(pose.right_hand.screen_pos[0] * w)
+                ry = int(pose.right_hand.screen_pos[1] * h)
+                hands.append(("RIGHT", (rx, ry), pose.right_hand))
+
+        for tgt in self.payload_targets:
+            cx, cy = int(tgt.centroid[0] * w), int(tgt.centroid[1] * h)
+            is_expected = bool(exp_tgt and (exp_tgt == tgt.class_name or exp_tgt in tgt.class_name or tgt.class_name in exp_tgt))
+
+            # Find closest hand to this target station
+            closest_hand_dist = float("inf")
+            closest_hand_pt = None
+            for h_name, (hx, hy), h_state in hands:
+                d = np.hypot(h_state.screen_pos[0] - tgt.centroid[0], h_state.screen_pos[1] - tgt.centroid[1])
+                for f_pos in h_state.fingers.values():
+                    fd = np.hypot(f_pos[0] - tgt.centroid[0], f_pos[1] - tgt.centroid[1])
+                    if fd < d:
+                        d = fd
+                if d < closest_hand_dist:
+                    closest_hand_dist = d
+                    closest_hand_pt = (hx, hy)
+
+            # Check dwell status from classifier
+            is_dwelling = (
+                (self.classifier.left_dwell_target == tgt.class_name) or
+                (self.classifier.right_dwell_target == tgt.class_name)
+            )
+            dwell_f = max(
+                self.classifier.left_dwell_frames if self.classifier.left_dwell_target == tgt.class_name else 0,
+                self.classifier.right_dwell_frames if self.classifier.right_dwell_target == tgt.class_name else 0
+            )
+
+            # STATE 1: Hand in contact / Dwelling on Station
+            if is_dwelling and dwell_f > 0:
+                progress = min(1.0, dwell_f / 6.0)
+                if is_expected:
+                    # Compliant Interaction: Emerald Green glow and circular progress ring
+                    ring_col = (0, 255, 120)
+                    cv2.circle(frame, (cx, cy), 24, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 18, ring_col, 2, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 12, ring_col, -1, cv2.LINE_AA)
+
+                    sweep_angle = int(progress * 360)
+                    cv2.ellipse(frame, (cx, cy), (26, 26), -90, 0, sweep_angle, (0, 255, 120), 3, cv2.LINE_AA)
+
+                    prog_str = f"ACQUIRING {int(progress * 100)}%" if progress < 1.0 else "✓ VERIFIED"
+                    self._draw_shadowed_text(frame, prog_str, (cx - 36, cy - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 120), 2)
+                    self._draw_shadowed_text(frame, tgt.class_name, (cx - 28, cy + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (220, 255, 220), 1)
+                else:
+                    # Deviation / Wrong Object Contact: High-intensity Warning Red
+                    warn_col = (0, 40, 255)
+                    cv2.circle(frame, (cx, cy), 26, (0, 0, 255), 2, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 14, warn_col, -1, cv2.LINE_AA)
+                    self._draw_shadowed_text(frame, "⚠️ WRONG OBJECT", (cx - 44, cy - 32), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 40, 255), 2)
+                    self._draw_shadowed_text(frame, tgt.class_name, (cx - 28, cy + 36), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (180, 180, 255), 1)
+
+            # STATE 2: Hand Approaching (< 0.22 screen distance)
+            elif closest_hand_pt and closest_hand_dist < 0.22:
+                beam_col = (0, 229, 255) if is_expected else (0, 140, 255)
+                # Visual laser targeting guide line directly from hand to target station
+                cv2.line(frame, closest_hand_pt, (cx, cy), beam_col, 1, cv2.LINE_AA)
+                cv2.circle(frame, (cx, cy), 20, beam_col, 1, cv2.LINE_AA)
+                cv2.circle(frame, (cx, cy), 14, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.circle(frame, (cx, cy), 10, beam_col, -1, cv2.LINE_AA)
+
+                prox_pct = int(max(0, (1.0 - closest_hand_dist / 0.22) * 100))
+                tag_label = f"{tgt.class_name} [{prox_pct}% LOCK]" if is_expected else f"{tgt.class_name} (NOT EXPECTED)"
+                lbl_col = (0, 255, 200) if is_expected else (0, 160, 255)
+                self._draw_shadowed_text(frame, tag_label, (cx - 30, cy - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.40, lbl_col, 1)
+
+            # STATE 3: Idle / Default Station Display
+            else:
+                if is_expected:
+                    # Required Target Beacon: Glowing Cyan/Gold
+                    cv2.circle(frame, (cx, cy), 20, (0, 229, 255), 1, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 15, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 10, (255, 200, 0), -1, cv2.LINE_AA)
+                    self._draw_shadowed_text(frame, f"★ {tgt.class_name}", (cx - 30, cy - 18), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 255, 220), 1)
+                else:
+                    # Inactive Target Station: Clean Sky Blue
+                    cv2.circle(frame, (cx, cy), 16, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 12, (255, 200, 0), 1, cv2.LINE_AA)
+                    cv2.circle(frame, (cx, cy), 8, (255, 180, 0), -1, cv2.LINE_AA)
+                    self._draw_shadowed_text(frame, tgt.class_name, (cx - 24, cy - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (240, 220, 100), 1)
+
     def _draw_hud(
         self,
         frame: np.ndarray,
@@ -1867,10 +2032,7 @@ class AstronautMonitoringSystem:
         h, w, _ = frame.shape
 
         # 1. Render Protocol Target Stations
-        for tgt in self.payload_targets:
-            cx, cy = int(tgt.centroid[0] * w), int(tgt.centroid[1] * h)
-            cv2.circle(frame, (cx, cy), 12, (255, 200, 0), -1)
-            cv2.putText(frame, tgt.class_name, (cx - 24, cy - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 200, 0), 1)
+        self._render_procedure_dots(frame, w, h, pose=pose, current_step=self.compliance_engine.current_step())
 
         # 2. Render AI-Detected Handheld / Scene Objects
         for obj in ai_objects:
@@ -1944,17 +2106,15 @@ class AstronautMonitoringSystem:
             cv2.circle(frame, (px, py), 5, j_color, -1, cv2.LINE_AA)
             cv2.circle(frame, (px, py), 8, (255, 255, 255), 1, cv2.LINE_AA)
 
-        # Badge indicating active 3D skeleton tracking
-        cv2.rectangle(frame, (w - 380, h - 56), (w - 10, h - 34), (10, 15, 25), -1)
-        cv2.rectangle(frame, (w - 380, h - 56), (w - 10, h - 34), (0, 230, 118), 1)
-        cv2.putText(frame, "3D SKELETAL RIG: 33 JOINTS TRACKED", (w - 370, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 118), 1)
+        # Badge indicating active 3D skeleton tracking (100% transparent)
+        self._draw_hud_box(frame, (w - 380, h - 56), (w - 10, h - 34), border_color=(0, 230, 118), alpha=0.0)
+        self._draw_shadowed_text(frame, "3D SKELETAL RIG: 33 JOINTS TRACKED", (w - 370, h - 40), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 118), 1)
 
-        # Acceleration Engine Badge
+        # Acceleration Engine Badge (100% transparent)
         pose_dev = getattr(self.pose_engine, "device_used", "CPU")
         dev_color = (0, 255, 120) if pose_dev == "GPU" else (0, 200, 255)
-        cv2.rectangle(frame, (w - 380, h - 30), (w - 10, h - 8), (10, 15, 25), -1)
-        cv2.rectangle(frame, (w - 380, h - 30), (w - 10, h - 8), dev_color, 1)
-        cv2.putText(frame, f"INFERENCE ENGINE: {pose_dev} ACCELERATED", (w - 370, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, dev_color, 1)
+        self._draw_hud_box(frame, (w - 380, h - 30), (w - 10, h - 8), border_color=dev_color, alpha=0.0)
+        self._draw_shadowed_text(frame, f"INFERENCE ENGINE: {pose_dev} ACCELERATED", (w - 370, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, dev_color, 1)
 
         # 4. MARK BOTH HANDS PROMINENTLY (AMBIDEXTROUS CAPABILITY)
         # Left Hand: Electric Violet/Magenta (214, 112, 218)
@@ -1975,86 +2135,104 @@ class AstronautMonitoringSystem:
                 cv2.line(frame, (lx, ly), (fx, fy), (214, 112, 218), 1)
                 cv2.circle(frame, (fx, fy), 3, (255, 128, 255), -1)
 
-            # Prominent Hand Status Banner
+            # Prominent Hand Status Banner (100% transparent)
             l_held = pose.left_hand.held_object
             l_status = f"HELD: {l_held}" if l_held else "EMPTY (READY)"
-            cv2.rectangle(frame, (lx - 70, ly - 42), (lx + 90, ly - 18), (14, 10, 24), -1)
-            cv2.rectangle(frame, (lx - 70, ly - 42), (lx + 90, ly - 18), (214, 112, 218), 1)
-            cv2.putText(frame, f"[L-HAND] {l_status}", (lx - 66, ly - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (214, 112, 218), 1)
+            self._draw_hud_box(frame, (lx - 70, ly - 42), (lx + 90, ly - 18), border_color=(214, 112, 218), alpha=0.0)
+            self._draw_shadowed_text(frame, f"[L-HAND] {l_status}", (lx - 66, ly - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (214, 112, 218), 1)
 
-        # Right Hand: Neon Amber/Orange (0, 145, 255)
+        # Right Hand: Cyan/Sky-Blue (0, 200, 255)
         if pose.right_hand and pose.right_hand.is_detected:
             rx, ry = int(pose.right_hand.screen_pos[0] * w), int(pose.right_hand.screen_pos[1] * h)
             r_palm_x, r_palm_y = int(pose.right_hand.palm_pos[0] * w), int(pose.right_hand.palm_pos[1] * h)
 
             # Crosshairs & concentric reticle
-            cv2.circle(frame, (rx, ry), 10, (0, 145, 255), 2)
-            cv2.circle(frame, (rx, ry), 18, (0, 145, 255), 1)
-            cv2.line(frame, (rx - 14, ry), (rx + 14, ry), (0, 145, 255), 1)
-            cv2.line(frame, (rx, ry - 14), (rx, ry + 14), (0, 145, 255), 1)
-            cv2.circle(frame, (r_palm_x, r_palm_y), 5, (0, 145, 255), -1)
+            cv2.circle(frame, (rx, ry), 10, (0, 200, 255), 2)
+            cv2.circle(frame, (rx, ry), 18, (0, 200, 255), 1)
+            cv2.line(frame, (rx - 14, ry), (rx + 14, ry), (0, 200, 255), 1)
+            cv2.line(frame, (rx, ry - 14), (rx, ry + 14), (0, 200, 255), 1)
+            cv2.circle(frame, (r_palm_x, r_palm_y), 5, (0, 200, 255), -1)
 
             # Draw finger skeletal lines from wrist
             for f_xy in pose.right_hand.fingers.values():
                 fx, fy = int(f_xy[0] * w), int(f_xy[1] * h)
-                cv2.line(frame, (rx, ry), (fx, fy), (0, 145, 255), 1)
+                cv2.line(frame, (rx, ry), (fx, fy), (0, 200, 255), 1)
                 cv2.circle(frame, (fx, fy), 3, (100, 190, 255), -1)
 
-            # Prominent Hand Status Banner
+            # Prominent Hand Status Banner (100% transparent)
             r_held = pose.right_hand.held_object
             r_status = f"HELD: {r_held}" if r_held else "EMPTY (READY)"
-            cv2.rectangle(frame, (rx - 70, ry - 42), (rx + 90, ry - 18), (24, 16, 10), -1)
-            cv2.rectangle(frame, (rx - 70, ry - 42), (rx + 90, ry - 18), (0, 145, 255), 1)
-            cv2.putText(frame, f"[R-HAND] {r_status}", (rx - 66, ry - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 145, 255), 1)
+            self._draw_hud_box(frame, (rx - 70, ry - 42), (rx + 90, ry - 18), border_color=(0, 200, 255), alpha=0.0)
+            self._draw_shadowed_text(frame, f"[R-HAND] {r_status}", (rx - 66, ry - 26), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 200, 255), 1)
 
-        # 5. Top Telemetry Banner with Scenario Camera Tag & Channel
-        cam_tag = self.compliance_engine.protocol_data.get("camera_tag", "CAM-01 • GLOVEBOX BIO-RACK")
+        # 5. Top Telemetry Banner (Clean aerospace layout, NO overlapping text)
         cam_chan = self.compliance_engine.protocol_data.get("camera_channel", "CAM-MSG-01-A")
-
-        cv2.rectangle(frame, (10, 10), (560, 116), (10, 15, 25), -1)
-        cv2.rectangle(frame, (10, 10), (560, 116), (0, 229, 255), 1)
+        exp_name = self.compliance_engine.protocol_data.get("experiment_name", "Active Experiment")
 
         step = self.compliance_engine.current_step()
         status_text = f"EXPECTED: {step['expected_action']} {step['expected_target']}" if step else "STATUS: EXPERIMENT COMPLETE"
-        cv2.putText(frame, f"● {cam_tag.replace('●', '').strip()}", (20, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 229, 255), 2)
-        cv2.putText(frame, f"PROTOCOL: {self.compliance_engine.protocol_id} [{cam_chan}]", (20, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 1)
-        cv2.putText(frame, status_text, (20, 84), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 120), 2)
-        cv2.putText(frame, f"BODY ROLL: {pose.body_roll_degrees:.1f} deg | ACTOR HAND: {pose.active_hand}", (20, 106), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1)
+        step_desc = step.get('description', '') if step else ''
 
-        # 6. IN-HAND PAYLOAD DATA HUD CARD (When an object is picked)
+        # Left Info Card
+        l_card_w = min(440, w - 180)
+        self._draw_hud_box(frame, (10, 8), (l_card_w, 98), border_color=(0, 229, 255), border_thickness=1, alpha=0.0)
+        self._draw_shadowed_text(frame, f"MISSION: {exp_name[:36]}", (18, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 229, 255), 1)
+        self._draw_shadowed_text(frame, f"PROTOCOL: {self.compliance_engine.protocol_id} [{cam_chan}]", (18, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1)
+        self._draw_shadowed_text(frame, status_text, (18, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 120), 2)
+        if step_desc:
+            self._draw_shadowed_text(frame, f"DIRECTIVE: {step_desc[:46]}", (18, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 235, 180), 1)
+
+        # Right Telemetry Card
+        r_card_x = max(l_card_w + 8, w - 170)
+        self._draw_hud_box(frame, (r_card_x, 8), (w - 10, 98), border_color=(0, 229, 255), border_thickness=1, alpha=0.0)
+        if session_filename:
+            cv2.circle(frame, (w - 20, 24), 6, (0, 0, 255), -1)
+            self._draw_shadowed_text(frame, "REC ⏺", (r_card_x + 10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1)
+        else:
+            self._draw_shadowed_text(frame, "LIVE OPTICAL", (r_card_x + 10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 229, 255), 1)
+        self._draw_shadowed_text(frame, f"ROLL: {pose.body_roll_degrees:.1f}°", (r_card_x + 10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 200, 220), 1)
+        self._draw_shadowed_text(frame, f"ACTOR: {pose.active_hand}", (r_card_x + 10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 200, 220), 1)
+        if action:
+            self._draw_shadowed_text(frame, f"{action.action_type[:8]}", (r_card_x + 10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 255, 200), 1)
+        else:
+            self._draw_shadowed_text(frame, "STATUS: OK", (r_card_x + 10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 230, 118), 1)
+
+        # 6. Prominent Deviation Alert Banner (Translucent Red Overlay when error detected)
+        banner = getattr(self.compliance_engine, "active_deviation_banner", None)
+        if banner and time.time() < banner.get("expires", 0):
+            b_y1 = max(105, int(h * 0.23))
+            b_y2 = b_y1 + 54
+            sub_img = frame[b_y1:b_y2, 20:w-20]
+            if sub_img.size > 0:
+                red_rect = np.zeros_like(sub_img)
+                red_rect[:] = (0, 0, 170)
+                cv2.addWeighted(sub_img, 0.25, red_rect, 0.75, 0, sub_img)
+                frame[b_y1:b_y2, 20:w-20] = sub_img
+            cv2.rectangle(frame, (20, b_y1), (w - 20, b_y2), (0, 40, 255), 2, cv2.LINE_AA)
+            self._draw_shadowed_text(frame, f"⚠️  {banner['title']}", (35, b_y1 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
+            self._draw_shadowed_text(frame, banner['message'], (35, b_y1 + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 240, 255), 1)
+
+        # 7. IN-HAND PAYLOAD DATA HUD CARD (When an object is picked, 100% transparent)
         if pose.held_payload:
             pl = pose.held_payload
             specs = pl.get("specs", {})
-            card_h = 100
-            card_y = max(120, h - card_h - 40)
-            card_w = min(w - 20, 600)
+            card_h = 88
+            card_y = max(130, h - card_h - 40)
+            card_w = min(w - 20, 580)
 
-            # Deep aerospace backdrop
-            cv2.rectangle(frame, (10, card_y), (10 + card_w, card_y + card_h), (8, 14, 24), -1)
-            cv2.rectangle(frame, (10, card_y), (10 + card_w, card_y + card_h), (0, 230, 118), 2)
-
+            self._draw_hud_box(frame, (10, card_y), (10 + card_w, card_y + card_h), border_color=(0, 230, 118), border_thickness=1, alpha=0.0)
             obj_title = f"AI IDENTIFIED IN-HAND: {pl['object_name'].upper()} ({pl['hand']} HAND)"
-            cv2.putText(frame, obj_title, (20, card_y + 24), cv2.FONT_HERSHEY_SIMPLEX, 0.50, (0, 255, 120), 2)
+            self._draw_shadowed_text(frame, obj_title, (20, card_y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.46, (0, 255, 120), 2)
 
             line1 = f"Mass: {specs.get('microg_mass', '320 g')} | Grasp: {pl['grasp_confidence']}% | Hazard: {specs.get('hazard_level', 'Nominal')}"
             line2 = f"Target Bay: {specs.get('destination_bay', 'Rack Slot 1')} | Alignment: {specs.get('alignment_pin', 'Normal')}"
             line3 = f"Directive: {specs.get('handling', 'Maintain firm zero-G grasp.')}"
 
-            cv2.putText(frame, line1, (20, card_y + 48), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 240, 255), 1)
-            cv2.putText(frame, line2, (20, card_y + 68), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (180, 200, 220), 1)
-            cv2.putText(frame, line3, (20, card_y + 88), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 229, 255), 1)
+            self._draw_shadowed_text(frame, line1, (20, card_y + 44), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 240, 255), 1)
+            self._draw_shadowed_text(frame, line2, (20, card_y + 64), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 200, 220), 1)
+            self._draw_shadowed_text(frame, line3, (20, card_y + 82), cv2.FONT_HERSHEY_SIMPLEX, 0.34, (0, 229, 255), 1)
 
-        # 7. Action Badge
-        if action:
-            act_text = f"ACTION: {action.action_type} -> {action.target_object} ({action.hand} HAND)"
-            cv2.putText(frame, act_text, (w - 460, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 165, 255), 2)
-
-        # 8. Recording status
-        if session_filename:
-            cv2.circle(frame, (w - 25, 22), 7, (0, 0, 255), -1)
-            cv2.putText(frame, "REC", (w - 65, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
-
-        # 9. Lower Body & Leg Activity HUD Rendering
+        # 8. Lower Body & Leg Activity HUD Rendering
         leg_kp_pairs = [
             ("left_hip", "left_knee"), ("left_knee", "left_ankle"), ("left_ankle", "left_foot_index"),
             ("right_hip", "right_knee"), ("right_knee", "right_ankle"), ("right_ankle", "right_foot_index")
@@ -2068,51 +2246,48 @@ class AstronautMonitoringSystem:
                 cv2.line(frame, pt_a, pt_b, (0, 230, 118), 2)
                 cv2.circle(frame, pt_b, 4, (0, 255, 255), -1)
 
-        # 9. PROMINENT LEG DETECTION & LOWER BODY RESTRAINT OVERLAY
+        # Prominent Knee Indicators (100% transparent)
         if pose.left_leg and pose.left_leg.is_detected and "left_knee" in pose.keypoints:
             lk = pose.keypoints["left_knee"]
             lk_x, lk_y = int(lk.x * w), int(lk.y * h)
-            l_flexed = pose.left_leg.activity == "KNEE FLEXION"
-            l_col = (0, 165, 255) if l_flexed else (0, 230, 118)
+            l_col = (0, 229, 255)
             cv2.circle(frame, (lk_x, lk_y), 8, l_col, 2, cv2.LINE_AA)
             cv2.circle(frame, (lk_x, lk_y), 14, l_col, 1, cv2.LINE_AA)
             cv2.line(frame, (lk_x - 12, lk_y), (lk_x + 12, lk_y), l_col, 1)
             cv2.line(frame, (lk_x, lk_y - 12), (lk_x, lk_y + 12), l_col, 1)
-            cv2.rectangle(frame, (lk_x - 55, lk_y - 32), (lk_x + 75, lk_y - 12), (10, 18, 24), -1)
-            cv2.rectangle(frame, (lk_x - 55, lk_y - 32), (lk_x + 75, lk_y - 12), l_col, 1)
-            cv2.putText(frame, f"L-KNEE {int(pose.left_leg.knee_angle_deg)} deg", (lk_x - 50, lk_y - 18),
+            self._draw_hud_box(frame, (lk_x - 55, lk_y - 32), (lk_x + 75, lk_y - 12), border_color=l_col, alpha=0.0)
+            self._draw_shadowed_text(frame, f"L-KNEE {int(pose.left_leg.knee_angle_deg)} deg", (lk_x - 50, lk_y - 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.36, l_col, 1)
 
         if pose.right_leg and pose.right_leg.is_detected and "right_knee" in pose.keypoints:
             rk = pose.keypoints["right_knee"]
             rk_x, rk_y = int(rk.x * w), int(rk.y * h)
-            r_flexed = pose.right_leg.activity == "KNEE FLEXION"
-            r_col = (0, 165, 255) if r_flexed else (0, 229, 255)
+            r_col = (0, 229, 255)
             cv2.circle(frame, (rk_x, rk_y), 8, r_col, 2, cv2.LINE_AA)
             cv2.circle(frame, (rk_x, rk_y), 14, r_col, 1, cv2.LINE_AA)
             cv2.line(frame, (rk_x - 12, rk_y), (rk_x + 12, rk_y), r_col, 1)
             cv2.line(frame, (rk_x, rk_y - 12), (rk_x, rk_y + 12), r_col, 1)
-            cv2.rectangle(frame, (rk_x - 55, rk_y - 32), (rk_x + 75, rk_y - 12), (10, 18, 24), -1)
-            cv2.rectangle(frame, (rk_x - 55, rk_y - 32), (rk_x + 75, rk_y - 12), r_col, 1)
-            cv2.putText(frame, f"R-KNEE {int(pose.right_leg.knee_angle_deg)} deg", (rk_x - 50, rk_y - 18),
+            self._draw_hud_box(frame, (rk_x - 55, rk_y - 32), (rk_x + 75, rk_y - 12), border_color=r_col, alpha=0.0)
+            self._draw_shadowed_text(frame, f"R-KNEE {int(pose.right_leg.knee_angle_deg)} deg", (rk_x - 50, rk_y - 18),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.36, r_col, 1)
 
-        # Lower Body Telemetry Banner (Directly under top telemetry box)
+        # Lower Body Telemetry Banner
         l_ang = int(pose.left_leg.knee_angle_deg) if pose.left_leg else 180
         r_ang = int(pose.right_leg.knee_angle_deg) if pose.right_leg else 180
         l_act = pose.left_leg.activity if pose.left_leg else "STANDBY"
         r_act = pose.right_leg.activity if pose.right_leg else "STANDBY"
-        lb_col = (0, 165, 255) if ("FLEXION" in pose.lower_body_activity or "FLOATING" in pose.lower_body_activity) else (0, 230, 118)
-        leg_str = f"LEG DETECTION: L={l_ang} deg ({l_act}) | R={r_ang} deg ({r_act}) | {pose.lower_body_activity}"
-        cv2.rectangle(frame, (10, 122), (640, 146), (10, 15, 25), -1)
-        cv2.rectangle(frame, (10, 122), (640, 146), lb_col, 1)
-        cv2.putText(frame, leg_str, (18, 139), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (220, 240, 255), 1)
+        lb_col = (0, 229, 255)
+        leg_str = f"LEGS: L={l_ang}° ({l_act}) | R={r_ang}° ({r_act}) | {pose.lower_body_activity}"
+        self._draw_hud_box(frame, (10, 102), (min(w - 10, 620), 126), border_color=lb_col, border_thickness=1, alpha=0.0)
+        self._draw_shadowed_text(frame, leg_str, (18, 119), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (220, 240, 255), 1)
 
-        # 10. Camera Feed Watermark / Scenario Badge (Bottom Right)
-        cam_watermark = f"{cam_tag.replace('●', '').strip()} [{cam_chan}]"
-        cv2.rectangle(frame, (w - 380, h - 30), (w - 10, h - 8), (10, 15, 25), -1)
-        cv2.rectangle(frame, (w - 380, h - 30), (w - 10, h - 8), (0, 229, 255), 1)
-        cv2.putText(frame, cam_watermark, (w - 370, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 229, 255), 1)
+        # 9. Camera Feed Watermark (Bottom Right, 100% transparent)
+        cam_watermark = f"OPTICAL HUD [{cam_chan}]"
+        self._draw_hud_box(frame, (w - 240, h - 30), (w - 10, h - 8), border_color=(0, 229, 255), border_thickness=1, alpha=0.0)
+        self._draw_shadowed_text(frame, cam_watermark, (w - 230, h - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (0, 229, 255), 1)
+
+        # 10. Final Procedure Dots Pass: Always renders on top
+        self._render_procedure_dots(frame, w, h, pose=pose, current_step=self.compliance_engine.current_step())
 
     def _run_synthetic_loop(self):
         logger.info("Executing synthetic baseline monitoring loop...")
@@ -2134,7 +2309,7 @@ class AstronautMonitoringSystem:
             body_roll_degrees=0.0,
             dominant_wrist_pos=(0.0, 0.0, 0.0)
         )
-        cam_tag = self.compliance_engine.protocol_data.get("camera_tag", "CAM-01 • GLOVEBOX BIO-RACK")
+        cam_tag = self.compliance_engine.protocol_data.get("camera_tag", "OPTICAL HUD")
         cam_chan = self.compliance_engine.protocol_data.get("camera_channel", "CAM-MSG-01-A")
         self.mc_link.send_heartbeat(self.compliance_engine.protocol_id, step["step_id"] if step else 1, dummy_pose, camera_tag=cam_tag, camera_channel=cam_chan)
 

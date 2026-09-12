@@ -270,9 +270,6 @@
         <h1 style="font-size: 0.95rem; font-weight: 800; margin: 0; letter-spacing: 0.05em; color: #fff;">
           ASTROACT-AI <span style="color: #00e5ff; font-weight: 600;">• ENLARGED OPTICAL HUD</span>
         </h1>
-        <div style="font-size: 0.62rem; color: #94a3b8;" id="camera-subtitle">
-          CAM-01 • GLOVEBOX BIO-RACK | Microgravity Science Glovebox Bay
-        </div>
       </div>
     </div>
 
@@ -280,9 +277,6 @@
       <div class="rec-indicator-pulse">
         <span class="dot"></span>
         <span>REC 1080P/30FPS</span>
-      </div>
-      <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; color: #38bdf8;" id="standalone-clock">
-        00:00:00 UTC
       </div>
       <button class="toolbar-btn" onclick="window.close()" title="Close separate window">✕ Close</button>
     </div>
@@ -372,11 +366,6 @@
     let isMirrored = false;
     let showReticle = true;
 
-    // Clock
-    setInterval(() => {
-      const now = new Date();
-      document.getElementById('standalone-clock').textContent = now.toUTCString().split(' ')[4] + ' UTC';
-    }, 1000);
 
     function setZoom(factor) {
       currentZoom = factor;

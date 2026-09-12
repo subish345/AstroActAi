@@ -44,7 +44,7 @@ telemetry_state = {
     "status": "ONLINE",
     "protocol_id": "BAS-EXP-BIO-2026",
     "experiment_name": "Biological Specimen Insertion & Rack Seal",
-    "camera_tag": "CAM-01 • GLOVEBOX BIO-RACK",
+    "camera_tag": "OPTICAL HUD",
     "camera_channel": "CAM-MSG-01-A",
     "camera_location": "Microgravity Science Glovebox Bay",
     "current_step": 1,
@@ -215,7 +215,7 @@ async def select_protocol(protocol_id: str):
     # Reset telemetry state for new protocol
     telemetry_state["protocol_id"] = proto_data["protocol_id"]
     telemetry_state["experiment_name"] = proto_data["experiment_name"]
-    telemetry_state["camera_tag"] = proto_data.get("camera_tag", matched.get("camera_tag", "CAM-01 • GLOVEBOX BIO-RACK"))
+    telemetry_state["camera_tag"] = proto_data.get("camera_tag", matched.get("camera_tag", "OPTICAL HUD"))
     telemetry_state["camera_channel"] = proto_data.get("camera_channel", matched.get("camera_channel", "CAM-MSG-01-A"))
     telemetry_state["camera_location"] = proto_data.get("camera_location", matched.get("camera_location", "Payload Workstation"))
     telemetry_state["current_step"] = 1

@@ -141,7 +141,7 @@ def simulate_action(
     wrist_xy: Tuple[float, float],
     roll_deg: float = 0.0,
     wrist_vel: float = 0.15,
-    repeat_frames: int = 10,
+    repeat_frames: int = 15,
     frame_delay: float = 0.08
 ):
     """Feeds consecutive frames of an action to satisfy the debounce hysteresis filter."""
